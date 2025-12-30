@@ -5,6 +5,7 @@ services:
     command: ["run", "src/server.ts"]
     environment:
       PORT: "3000"
+      GITHUB_TOKEN: "${GITHUB_TOKEN}"
       GITHUB_WEBHOOK_SECRET: "${GITHUB_WEBHOOK_SECRET}"
     ports:
       - "3000:3000"
