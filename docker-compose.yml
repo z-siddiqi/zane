@@ -1,14 +1,26 @@
 services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
   server:
     build: .
     image: zane
     command: ["run", "src/server.ts"]
     environment:
       PORT: "3000"
+      REDIS_URL: "redis://redis:6379"
       GITHUB_TOKEN: "${GITHUB_TOKEN}"
       GITHUB_WEBHOOK_SECRET: "${GITHUB_WEBHOOK_SECRET}"
     ports:
       - "3000:3000"
+    depends_on:
+      - redis
     volumes:
       - ./data:/usr/src/app/data
     restart: unless-stopped
@@ -25,3 +37,6 @@ services:
       - ./cloudflared:/etc/cloudflared:ro
     depends_on:
       - server
+
+volumes:
+  redis_data:

@@ -1,70 +1,8 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import * as db from "./db";
+import { queue } from "./queue";
+import { verifyWebhookSignature } from "./utils";
 
-const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET ?? "";
-
-function verifyGithubSignature(
-  rawBody: Uint8Array,
-  signatureHeader: string | null
-): boolean {
-  if (!WEBHOOK_SECRET) {
-    console.error("[error] GITHUB_WEBHOOK_SECRET not set");
-    return false;
-  }
-
-  if (!signatureHeader?.startsWith("sha256=")) return false;
-
-  const theirSigHex = signatureHeader.slice("sha256=".length);
-  const mac = createHmac("sha256", WEBHOOK_SECRET)
-    .update(rawBody)
-    .digest("hex");
-
-  // timingSafeEqual requires same length buffers
-  const a = Buffer.from(theirSigHex, "hex");
-  const b = Buffer.from(mac, "hex");
-  if (a.length !== b.length) return false;
-
-  return timingSafeEqual(a, b);
-}
-
-function summariseEvent(event: string, payload: any) {
-  if (event === "ping") {
-    return {
-      kind: "ping",
-      hook_id: payload.hook_id,
-      zen: payload.zen,
-    };
-  }
-
-  if (event === "projects_v2_item") {
-    return {
-      kind: "projects_v2_item",
-      action: payload.action,
-      org: payload.organization?.login,
-      sender: payload.sender?.login,
-      item_id: payload.projects_v2_item?.id,
-      project_node_id: payload.projects_v2_item?.project_node_id,
-    };
-  }
-
-  if (event === "sub_issues") {
-    return {
-      kind: "sub_issues",
-      action: payload.action,
-      repo: payload.repository?.full_name,
-      parent_issue_id: payload.parent_issue_id,
-      parent_issue_number: payload.parent_issue?.number,
-      parent_issue_title: payload.parent_issue?.title,
-      child_issue_number: payload.issue?.number,
-      child_issue_title: payload.issue?.title,
-    };
-  }
-
-  return {
-    kind: event,
-    action: payload.action,
-    repo: payload.repository?.full_name,
-  };
-}
+const GITHUB_WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET ?? "";
 
 const server = Bun.serve({
   async fetch(req) {
@@ -83,7 +21,7 @@ const server = Bun.serve({
     const signature256 = req.headers.get("x-hub-signature-256");
 
     const raw = new Uint8Array(await req.arrayBuffer());
-    if (!verifyGithubSignature(raw, signature256)) {
+    if (!verifyWebhookSignature(raw, signature256, GITHUB_WEBHOOK_SECRET)) {
       console.error(
         `[deny] invalid signature delivery=${delivery} event=${event}`
       );
@@ -99,21 +37,67 @@ const server = Bun.serve({
       return new Response(null, { status: 400 });
     }
 
-    const summary = summariseEvent(event, payload);
-    console.log(`[ok] delivery=${delivery} event=${event}`);
-    console.log(summary);
+    const action = payload?.action ?? null;
+
+    const _delivery = db.upsertDelivery(delivery, event, action);
+    if (_delivery.changes === 0) {
+      console.log(`[server] duplicate delivery detected: ${delivery}`);
+      return new Response(
+        JSON.stringify({ received: true, duplicate: true, delivery, event }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+
+    db.upsertWebhookEvent({
+      deliveryId: delivery,
+      event,
+      action,
+      repoFullName: payload.repository?.full_name ?? null,
+      payloadJson: JSON.stringify(payload),
+    });
+
+    if (event === "projects_v2_item") {
+      const fv = payload?.changes?.field_value;
+
+      const isStatus = fv?.field_type === "single_select" && fv?.field_name === "Status";
+
+      const movedToInProgress =
+        isStatus &&
+        (fv?.to?.name ?? "").toLowerCase() === "in progress" &&
+        (fv?.from?.name ?? "").toLowerCase() !== "in progress";
+
+      if (movedToInProgress) {
+        const contentNodeId = payload.projects_v2_item?.content_node_id;
+        const jobId = `task-${contentNodeId}-${Date.now()}`;
+        
+        await queue.add(
+          "ENSURE_FEATURE_SPEC",
+          {
+            projectItemNodeId: itemNodeId,
+            contentNodeId, // this is the Issue node id; useful later
+            projectNodeId: payload.projects_v2_item?.project_node_id,
+            org: payload.organization?.login,
+            from: fv.from?.name,
+            to: fv.to?.name,
+            changedAt: payload.projects_v2_item?.updated_at,
+          },
+          {
+            jobId,
+            attempts: 2,
+            backoff: { type: "exponential", delay: 5000 },
+          }
+        );
+
+        console.log(`[server] enqueued: ${jobId}`);
+      }
+    }
 
     return new Response(
-      JSON.stringify({
-        received: true,
-        delivery,
-        event,
-        summary,
-      }),
-      { status: 200 }
+      JSON.stringify({ received: true, duplicate: false, delivery, event }),
+      { status: 200, headers: { "content-type": "application/json" } }
     );
   },
 });
 
-console.log(`Listening on http://localhost:${server.port}`);
-console.log(`Webhook endpoint: http://localhost:${server.port}/webhook`);
+console.log(`[server] listening on ${server.url}`);
+console.log(`[server] webhook endpoint: ${server.url}/webhook`);
