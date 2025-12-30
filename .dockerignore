@@ -1,0 +1,26 @@
+# dependencies
+node_modules
+
+# docker
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# version control
+.git
+.gitignore
+
+# documentation
+README.md
+LICENSE
+
+# dotenv environment variable files
+.env
+
+# ide files
+.vscode
+
+# misc
+.DS_Store
+Makefile
+helm-charts

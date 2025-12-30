@@ -1,6 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-const PORT = 3000;
 const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET ?? "";
 
 function verifyGithubSignature(
@@ -67,8 +66,7 @@ function summariseEvent(event: string, payload: any) {
   };
 }
 
-Bun.serve({
-  port: PORT,
+const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
 
@@ -117,5 +115,5 @@ Bun.serve({
   },
 });
 
-console.log(`Listening on http://localhost:${PORT}`);
-console.log(`Webhook endpoint: http://localhost:${PORT}/webhook`);
+console.log(`Listening on http://localhost:${server.port}`);
+console.log(`Webhook endpoint: http://localhost:${server.port}/webhook`);
