@@ -73,7 +73,9 @@ ${taskBody}
       const session = await instance.createSession(`Task: ${path.basename(promptPath)}`);
       console.log(`[opencode:${instance.port}] Session: ${session.id}`);
   
-      await instance.sendPromptAsync(session.id, await readFile(promptPath, "utf-8"));
+      await instance.sendPromptAsync(session.id, await readFile(promptPath, "utf-8"), {
+        model: { providerID: "anthropic", modelID: "claude-opus-4-5" },
+      });
       console.log(`[opencode:${instance.port}] Prompt sent, listening for events...`);
   
       await waitForCompletion(instance, session.id, 600000);

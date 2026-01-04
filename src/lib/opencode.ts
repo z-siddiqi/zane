@@ -83,11 +83,20 @@ export class OpenCodeInstance {
     return (await response.json()) as Session;
   }
 
-  async sendPromptAsync(sessionId: string, prompt: string): Promise<void> {
+  async sendPromptAsync(
+    sessionId: string,
+    prompt: string,
+    options?: { model?: { providerID: string; modelID: string } }
+  ): Promise<void> {
+    const body: Record<string, any> = { parts: [{ type: "text", text: prompt }] };
+    if (options?.model) {
+      body.model = options.model;
+    }
+
     const response = await fetch(`${this.baseUrl}/session/${sessionId}/prompt_async`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ parts: [{ type: "text", text: prompt }] }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok && response.status !== 204) throw new Error(`Failed to send prompt: ${response.status}`);
