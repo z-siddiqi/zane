@@ -14,5 +14,11 @@ Requirements:
 - Codex CLI installed and authenticated (`codex login`)
 - `codex app-server` available on PATH
 
+Optional env:
+- `ANCHOR_ORBIT_URL` (e.g. `wss://orbit.<your-domain>.workers.dev/ws/anchor`)
+- `ANCHOR_ORBIT_TOKEN` (if Orbit is protected)
+- `ANCHOR_ORBIT_RECONNECT_MS` (default `2000`)
+Env is loaded from the repo root `.env` via the run scripts.
+
 WebSocket endpoint:
 - `ws://localhost:8788/ws/anchor`
