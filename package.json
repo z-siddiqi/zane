@@ -1,15 +1,19 @@
 {
   "name": "zane",
-  "module": "index.ts",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
+    "dev": "bunx --bun vite",
+    "build": "bunx --bun vite build",
+    "preview": "bunx --bun vite preview --port 4173",
     "migrate": "bash scripts/migrate.sh"
   },
-  "devDependencies": {
-    "@types/bun": "latest"
+  "dependencies": {
+    "svelte": "^5.0.0"
   },
-  "peerDependencies": {
-    "typescript": "^5"
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
   }
 }

@@ -1,0 +1,28 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: system-ui, sans-serif;
+    color: #111;
+    background: #fff;
+}
+
+#app {
+    min-height: 100vh;
+}
+
+.app {
+    width: 100%;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+@media (max-width: 720px) {
+    .app {
+        max-width: 100%;
+        padding: 1rem;
+    }
+}
