@@ -10,14 +10,18 @@ body {
 }
 
 #app {
-    min-height: 100vh;
+    height: 100vh;
 }
 
 .app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
     width: 100%;
     max-width: 900px;
     margin: 0 auto;
     padding: 2rem;
+    gap: 1rem;
 }
 
 @media (max-width: 720px) {

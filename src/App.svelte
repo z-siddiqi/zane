@@ -1,7 +1,11 @@
 <script lang="ts">
   import { socket } from "./lib/socket.svelte";
   import { threads } from "./lib/threads.svelte";
+  import { messages } from "./lib/messages.svelte";
   import ThreadList from "./components/ThreadList.svelte";
+  import Transcript from "./components/Transcript.svelte";
+
+  void messages;
 
   let url = $state("wss://orbit.yrvgilpord.workers.dev/ws/client");
   let token = $state("");
@@ -59,6 +63,7 @@
 
   {#if socket.status === "connected"}
     <ThreadList {workingDir} />
+    <Transcript />
   {/if}
 </div>
 
@@ -67,7 +72,6 @@
     display: flex;
     align-items: center;
     gap: 1rem;
-    margin-bottom: 1rem;
   }
 
   .header h1 {
@@ -88,7 +92,6 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    margin-bottom: 1rem;
   }
 
   input {

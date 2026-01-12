@@ -31,6 +31,18 @@ class ThreadsStore {
     this.currentId = threadId;
   }
 
+  open(threadId: string, cwd: string) {
+    const id = Date.now();
+    this.loading = true;
+    this.currentId = threadId;
+    this.#pendingRequests.set(id, "resume");
+    socket.send({
+      method: "thread/resume",
+      id,
+      params: { threadId, cwd },
+    });
+  }
+
   start(cwd: string) {
     const id = Date.now();
     this.#pendingRequests.set(id, "start");
@@ -72,6 +84,10 @@ class ThreadsStore {
       if (type === "list" && msg.result) {
         const result = msg.result as { data: ThreadInfo[] };
         this.list = result.data || [];
+        this.loading = false;
+      }
+
+      if (type === "resume") {
         this.loading = false;
       }
     }

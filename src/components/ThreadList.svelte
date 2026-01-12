@@ -39,7 +39,7 @@
     <ul>
       {#each threads.list as thread (thread.id)}
         <li class:selected={thread.id === threads.currentId}>
-          <button class="thread-item" onclick={() => threads.select(thread.id)}>
+          <button class="thread-item" onclick={() => threads.open(thread.id, workingDir)}>
             <span class="preview">{thread.preview || "New thread"}</span>
             <span class="meta">{formatTime(thread.createdAt)}</span>
           </button>
