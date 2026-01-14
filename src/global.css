@@ -1,32 +1,52 @@
+@import "./lib/styles/tokens.css";
+
 * {
-    box-sizing: border-box;
+  box-sizing: border-box;
 }
 
-body {
-    margin: 0;
-    font-family: system-ui, sans-serif;
-    color: #111;
-    background: #fff;
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: var(--font-mono);
+  color: var(--cli-text);
+  background: var(--cli-bg);
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 #app {
-    height: 100vh;
+  height: 100%;
 }
 
 .app {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    width: 100%;
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 2rem;
-    gap: 1rem;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
 }
 
-@media (max-width: 720px) {
-    .app {
-        max-width: 100%;
-        padding: 1rem;
-    }
+/* Smooth theme transitions */
+*, *::before, *::after {
+  transition: background-color var(--transition-fast),
+              border-color var(--transition-fast),
+              color var(--transition-fast);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--cli-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--cli-text-muted);
 }

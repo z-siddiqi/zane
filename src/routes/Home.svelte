@@ -2,6 +2,9 @@
   import { socket } from "../lib/socket.svelte";
   import { threads } from "../lib/threads.svelte";
   import { config } from "../lib/config.svelte";
+  import { theme, type Theme } from "../lib/theme.svelte";
+  import ShimmerDot from "../lib/components/ShimmerDot.svelte";
+  import "../lib/styles/tokens.css";
 
   let newThreadDir = $state("");
 
@@ -31,6 +34,12 @@
     });
   }
 
+  const themeIcons: Record<Theme, string> = {
+    system: "◐",
+    light: "○",
+    dark: "●",
+  };
+
   $effect(() => {
     if (socket.status === "connected") {
       threads.fetch();
@@ -40,63 +49,108 @@
 
 <div class="home">
   <header class="header">
-    <h1>Zane</h1>
-    <span class="status" class:connected={socket.status === "connected"}>
+    <span class="brand">zane</span>
+    <span class="separator">·</span>
+    {#if socket.status === "connecting"}
+      <ShimmerDot color="var(--cli-text-dim)" />
+    {:else}
+      <span
+        class="status-icon"
+        class:connected={socket.status === "connected"}
+        class:error={socket.status === "error"}
+      >
+        {socket.status === "connected" ? "●" : socket.status === "error" ? "✗" : "○"}
+      </span>
+    {/if}
+    <span class="status-label" class:connected={socket.status === "connected"}>
       {socket.status}
     </span>
+
+    <div class="spacer"></div>
+
+    <button
+      type="button"
+      class="theme-toggle"
+      onclick={() => theme.cycle()}
+      title="Theme: {theme.current}"
+    >
+      {themeIcons[theme.current]}
+    </button>
   </header>
 
   <div class="connection">
-    <input
-      type="text"
-      bind:value={config.url}
-      placeholder="WebSocket URL"
-      disabled={socket.status === "connected"}
-    />
-    <input
-      type="password"
-      bind:value={config.token}
-      placeholder="Token (optional)"
-      disabled={socket.status === "connected"}
-    />
-    <button onclick={handleConnect}>
+    <div class="field">
+      <label for="url">url</label>
+      <input
+        id="url"
+        type="text"
+        bind:value={config.url}
+        placeholder="ws://localhost:8788/ws"
+        disabled={socket.status === "connected"}
+      />
+    </div>
+    <div class="field">
+      <label for="token">token</label>
+      <input
+        id="token"
+        type="password"
+        bind:value={config.token}
+        placeholder="(optional)"
+        disabled={socket.status === "connected"}
+      />
+    </div>
+    <button class="connect-btn" onclick={handleConnect}>
       {socket.status === "connected" ? "Disconnect" : "Connect"}
     </button>
   </div>
 
   {#if socket.error}
-    <p class="error">{socket.error}</p>
+    <div class="error">
+      <span class="error-icon">✗</span>
+      <span class="error-text">{socket.error}</span>
+    </div>
   {/if}
 
   {#if socket.status === "connected"}
-    <div class="threads">
+    <div class="threads-section">
+      <div class="section-header">
+        <span class="section-title">Threads</span>
+        <button class="refresh-btn" onclick={() => threads.fetch()} title="Refresh">↻</button>
+      </div>
+
       <div class="new-thread">
+        <span class="prompt">&gt;</span>
         <input
           type="text"
           bind:value={newThreadDir}
-          placeholder="Working directory (e.g. /home/user/project)"
+          placeholder="Working directory path..."
+          onkeydown={(e) => e.key === "Enter" && handleNewThread()}
         />
-        <button onclick={handleNewThread} disabled={!newThreadDir.trim()}>+</button>
-        <button class="refresh" onclick={() => threads.fetch()}>[r]</button>
+        <button class="new-btn" onclick={handleNewThread} disabled={!newThreadDir.trim()}>
+          New
+        </button>
       </div>
 
       {#if threads.loading}
-        <p class="loading">Loading...</p>
+        <div class="loading">
+          <ShimmerDot /> Loading threads...
+        </div>
       {:else if threads.list.length === 0}
-        <p class="empty">No threads yet</p>
+        <div class="empty">No threads yet. Create one above.</div>
       {:else}
-        <ul>
+        <ul class="thread-list">
           {#each threads.list as thread (thread.id)}
-            <li>
-              <a class="thread-item" href="/thread/{thread.id}">
-                <span class="preview">{thread.preview || "New thread"}</span>
-                <span class="meta">{formatTime(thread.createdAt)}</span>
+            <li class="thread-item">
+              <a class="thread-link" href="/thread/{thread.id}">
+                <span class="thread-icon">›</span>
+                <span class="thread-preview">{thread.preview || "New thread"}</span>
+                <span class="thread-meta">{formatTime(thread.createdAt)}</span>
               </a>
               <button
-                class="archive"
+                class="archive-btn"
                 onclick={() => threads.archive(thread.id)}
-                title="Archive"
-              >[bin]</button>
+                title="Archive thread"
+              >×</button>
             </li>
           {/each}
         </ul>
@@ -109,155 +163,314 @@
   .home {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    min-height: 100vh;
+    overflow: hidden;
+    background: var(--cli-bg);
+    color: var(--cli-text);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
   }
 
+  /* Header */
   .header {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    background: var(--cli-bg-elevated);
+    border-bottom: 1px solid var(--cli-border);
   }
 
-  .header h1 {
-    margin: 0;
-    font-size: 1.5rem;
+  .brand {
+    font-weight: 600;
+    color: var(--cli-prefix-agent);
   }
 
-  .status {
-    font-size: 0.875rem;
-    color: #666;
+  .separator {
+    color: var(--cli-text-muted);
   }
 
-  .status.connected {
-    color: #16a34a;
+  .status-icon {
+    color: var(--cli-text-muted);
   }
 
+  .status-icon.connected {
+    color: var(--cli-success);
+  }
+
+  .status-icon.error {
+    color: var(--cli-error);
+  }
+
+  .status-label {
+    font-size: var(--text-xs);
+    color: var(--cli-text-dim);
+  }
+
+  .status-label.connected {
+    color: var(--cli-success);
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .theme-toggle {
+    padding: var(--space-xs) var(--space-sm);
+    background: transparent;
+    border: 1px solid var(--cli-border);
+    border-radius: var(--radius-sm);
+    color: var(--cli-text-dim);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .theme-toggle:hover {
+    background: var(--cli-selection);
+    color: var(--cli-text);
+  }
+
+  /* Connection */
   .connection {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: var(--space-sm);
+    padding: var(--space-md);
+    border-bottom: 1px solid var(--cli-border);
   }
 
-  input {
-    padding: 0.5rem;
-    font-size: 0.875rem;
-    border: 1px solid #ccc;
-    border-radius: 4px;
+  .field {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
   }
 
-  input:disabled {
-    background: #f5f5f5;
+  .field label {
+    width: 50px;
+    color: var(--cli-text-dim);
+    font-size: var(--text-xs);
   }
 
-  button {
-    padding: 0.5rem 1rem;
-    font-size: 0.875rem;
-    background: #111;
-    color: #fff;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
+  .field input {
+    flex: 1;
+        padding: var(--space-sm);
+    background: var(--cli-bg);
+    border: 1px solid var(--cli-border);
+    border-radius: var(--radius-sm);
+    color: var(--cli-text);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
   }
 
-  button:hover {
-    background: #333;
+  .field input:focus {
+    outline: none;
+    border-color: var(--cli-prefix-agent);
   }
 
-  button:disabled {
+  .field input:disabled {
     opacity: 0.5;
-    cursor: not-allowed;
+    background: var(--cli-bg-elevated);
   }
 
+  .field input::placeholder {
+    color: var(--cli-text-muted);
+  }
+
+  .connect-btn {
+    align-self: flex-start;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--cli-prefix-agent);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--cli-bg);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    cursor: pointer;
+    transition: opacity var(--transition-fast);
+  }
+
+  .connect-btn:hover {
+    opacity: 0.9;
+  }
+
+  /* Error */
   .error {
-    color: #dc2626;
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    background: rgba(248, 113, 113, 0.1);
+    border-bottom: 1px solid var(--cli-border);
+    color: var(--cli-error);
   }
 
-  .threads {
-    border: 1px solid #e5e5e5;
-    border-radius: 4px;
-    padding: 0.5rem;
+  .error-icon {
+    font-weight: 600;
   }
 
+  /* Threads Section */
+  .threads-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-sm) var(--space-md);
+    border-bottom: 1px solid var(--cli-border);
+  }
+
+  .section-title {
+    color: var(--cli-text-dim);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .refresh-btn {
+    padding: var(--space-xs);
+    background: transparent;
+    border: none;
+    color: var(--cli-text-muted);
+    font-size: var(--text-base);
+    cursor: pointer;
+    transition: color var(--transition-fast);
+  }
+
+  .refresh-btn:hover {
+    color: var(--cli-text);
+  }
+
+  /* New Thread */
   .new-thread {
     display: flex;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    background: var(--cli-bg-elevated);
+    border-bottom: 1px solid var(--cli-border);
+  }
+
+  .prompt {
+    color: var(--cli-prefix-agent);
+    font-weight: 600;
   }
 
   .new-thread input {
     flex: 1;
+        padding: var(--space-sm);
+    background: transparent;
+    border: none;
+    color: var(--cli-text);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
   }
 
-  .refresh {
-    font-family: monospace;
-    font-size: 0.75rem;
-    background: #f5f5f5;
-    color: #666;
-    border: 1px solid #ddd;
+  .new-thread input:focus {
+    outline: none;
   }
 
-  .refresh:hover {
-    background: #eee;
-    color: #111;
+  .new-thread input::placeholder {
+    color: var(--cli-text-muted);
   }
 
+  .new-btn {
+    padding: var(--space-xs) var(--space-sm);
+    background: var(--cli-prefix-agent);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--cli-bg);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    cursor: pointer;
+    transition: opacity var(--transition-fast);
+  }
+
+  .new-btn:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .new-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  /* Loading / Empty */
   .loading, .empty {
-    color: #666;
-    text-align: center;
-    padding: 1rem;
-    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-lg) var(--space-md);
+    color: var(--cli-text-muted);
   }
 
-  ul {
+  /* Thread List */
+  .thread-list {
     list-style: none;
     margin: 0;
     padding: 0;
-    max-height: 400px;
+    flex: 1;
     overflow-y: auto;
   }
 
-  li {
+  .thread-item {
     display: flex;
     align-items: center;
+    border-bottom: 1px solid var(--cli-border);
   }
 
-  .thread-item {
+  .thread-link {
     flex: 1;
     min-width: 0;
     display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    padding: 0.5rem;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
     text-decoration: none;
     color: inherit;
+    transition: background var(--transition-fast);
   }
 
-  .thread-item:hover {
-    background: #f5f5f5;
+  .thread-link:hover {
+    background: var(--cli-selection);
   }
 
-  .preview {
-    font-size: 0.875rem;
-    white-space: nowrap;
+  .thread-icon {
+    color: var(--cli-prefix-agent);
+    font-weight: 600;
+  }
+
+  .thread-preview {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--cli-text);
   }
 
-  .meta {
-    font-size: 0.75rem;
-    color: #888;
+  .thread-meta {
+    flex-shrink: 0;
+    font-size: var(--text-xs);
+    color: var(--cli-text-muted);
   }
 
-  .archive {
-    padding: 0.25rem 0.5rem;
-    background: none;
+  .archive-btn {
+    padding: var(--space-sm);
+    background: transparent;
     border: none;
-    color: #999;
-    font-family: monospace;
-    font-size: 0.75rem;
+    color: var(--cli-text-muted);
+    font-size: var(--text-base);
+    cursor: pointer;
+    transition: color var(--transition-fast);
   }
 
-  .archive:hover {
-    color: #dc2626;
+  .archive-btn:hover {
+    color: var(--cli-error);
   }
 </style>

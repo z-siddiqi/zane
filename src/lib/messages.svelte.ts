@@ -1,13 +1,37 @@
-import type { Message, RpcMessage } from "./types";
+import type { Message, RpcMessage, ApprovalRequest, TurnStatus, PlanStep } from "./types";
 import { socket } from "./socket.svelte";
 import { threads } from "./threads.svelte";
 
 const STORE_KEY = "__zane_messages_store__";
 
+type ReasoningMode = "summary" | "raw";
+type ReasoningState = {
+  buffer: string;
+  full: string;
+  mode: ReasoningMode | null;
+  header: string | null;
+};
+
 class MessagesStore {
   #byThread = $state<Map<string, Message[]>>(new Map());
   #streamingText = $state<Map<string, string>>(new Map());
   #loadedThreads = new Set<string>();
+  #pendingApprovals = $state<Map<string, ApprovalRequest>>(new Map());
+  #reasoningByThread = new Map<string, ReasoningState>();
+  #execCommands = new Map<string, string>();
+
+  // Turn state
+  #currentTurnId = $state<string | null>(null);
+  #currentTurnStatus = $state<TurnStatus | null>(null);
+  #currentPlan = $state<PlanStep[]>([]);
+  #planExplanation = $state<string | null>(null);
+  #statusDetail = $state<string | null>(null);
+
+  get turnId() { return this.#currentTurnId; }
+  get turnStatus() { return this.#currentTurnStatus; }
+  get plan() { return this.#currentPlan; }
+  get planExplanation() { return this.#planExplanation; }
+  get statusDetail() { return this.#statusDetail; }
 
   clearThread(threadId: string) {
     this.#byThread.delete(threadId);
@@ -25,6 +49,74 @@ class MessagesStore {
     return this.#byThread.get(threadId) ?? [];
   }
 
+  get pendingApprovals(): ApprovalRequest[] {
+    return Array.from(this.#pendingApprovals.values()).filter(
+      (a) => a.status === "pending"
+    );
+  }
+
+  approve(approvalId: string, forSession = false) {
+    const approval = this.#pendingApprovals.get(approvalId);
+    if (!approval || approval.status !== "pending") return;
+
+    approval.status = "approved";
+    this.#pendingApprovals = new Map(this.#pendingApprovals);
+    this.#updateApprovalInMessages(approvalId, "approved");
+
+    // Send JSON-RPC response with decision enum per Codex protocol (lowercase!)
+    const decision = forSession ? "acceptForSession" : "accept";
+    socket.send({
+      id: approval.rpcId,
+      result: { decision },
+    });
+  }
+
+  decline(approvalId: string) {
+    const approval = this.#pendingApprovals.get(approvalId);
+    if (!approval || approval.status !== "pending") return;
+
+    approval.status = "declined";
+    this.#pendingApprovals = new Map(this.#pendingApprovals);
+    this.#updateApprovalInMessages(approvalId, "declined");
+
+    // Decline = deny but let agent continue
+    socket.send({
+      id: approval.rpcId,
+      result: { decision: "decline" },
+    });
+  }
+
+  cancel(approvalId: string) {
+    const approval = this.#pendingApprovals.get(approvalId);
+    if (!approval || approval.status !== "pending") return;
+
+    approval.status = "cancelled";
+    this.#pendingApprovals = new Map(this.#pendingApprovals);
+    this.#updateApprovalInMessages(approvalId, "cancelled");
+
+    // Cancel = deny and interrupt turn
+    socket.send({
+      id: approval.rpcId,
+      result: { decision: "cancel" },
+    });
+  }
+
+  #updateApprovalInMessages(approvalId: string, status: "approved" | "declined" | "cancelled") {
+    const threadId = threads.currentId;
+    if (!threadId) return;
+
+    const messages = this.#byThread.get(threadId) ?? [];
+    const idx = messages.findIndex((m) => m.approval?.id === approvalId);
+    if (idx >= 0) {
+      const updated = [...messages];
+      updated[idx] = {
+        ...messages[idx],
+        approval: { ...messages[idx].approval!, status },
+      };
+      this.#byThread = new Map(this.#byThread).set(threadId, updated);
+    }
+  }
+
   #add(threadId: string, message: Message) {
     const existing = this.#byThread.get(threadId) ?? [];
     if (existing.some((m) => m.id === message.id)) {
@@ -34,28 +126,168 @@ class MessagesStore {
     this.#byThread = new Map(this.#byThread);
   }
 
-  #updateStreaming(threadId: string, itemId: string, delta: string) {
+  #upsert(threadId: string, message: Message) {
+    const existing = this.#byThread.get(threadId) ?? [];
+    const idx = existing.findIndex((m) => m.id === message.id);
+    if (idx >= 0) {
+      const updated = [...existing];
+      updated[idx] = { ...updated[idx], ...message };
+      this.#byThread = new Map(this.#byThread).set(threadId, updated);
+      return;
+    }
+    this.#byThread.set(threadId, [...existing, message]);
+    this.#byThread = new Map(this.#byThread);
+  }
+
+  #remove(threadId: string, messageId: string) {
+    const existing = this.#byThread.get(threadId) ?? [];
+    const idx = existing.findIndex((m) => m.id === messageId);
+    if (idx < 0) return;
+    const updated = [...existing];
+    updated.splice(idx, 1);
+    this.#byThread = new Map(this.#byThread).set(threadId, updated);
+  }
+
+  #appendToMessage(
+    threadId: string,
+    itemId: string,
+    delta: string,
+    role: Message["role"],
+    kind?: Message["kind"],
+  ) {
     const key = `${threadId}:${itemId}`;
     const current = this.#streamingText.get(key) ?? "";
     this.#streamingText.set(key, current + delta);
     this.#streamingText = new Map(this.#streamingText);
 
-    // Update or add the message
+    const messages = this.#byThread.get(threadId) ?? [];
+    const idx = messages.findIndex((m) => m.id === itemId);
+    const nextText = this.#streamingText.get(key) ?? "";
+
+    if (idx >= 0) {
+      const updated = [...messages];
+      updated[idx] = { ...messages[idx], text: nextText };
+      this.#byThread = new Map(this.#byThread).set(threadId, updated);
+    } else {
+      this.#upsert(threadId, {
+        id: itemId,
+        role,
+        kind,
+        text: nextText,
+        threadId,
+      });
+    }
+  }
+
+  #updateStreaming(threadId: string, itemId: string, delta: string) {
+    this.#appendToMessage(threadId, itemId, delta, "assistant");
+  }
+
+  #updateStreamingTool(threadId: string, itemId: string, delta: string, kind?: Message["kind"]) {
     const messages = this.#byThread.get(threadId) ?? [];
     const idx = messages.findIndex((m) => m.id === itemId);
 
     if (idx >= 0) {
-      const updated = [...messages];
-      updated[idx] = { ...messages[idx], text: this.#streamingText.get(key)! };
-      this.#byThread = new Map(this.#byThread).set(threadId, updated);
-    } else {
-      this.#add(threadId, {
-        id: itemId,
-        role: "assistant",
-        text: this.#streamingText.get(key)!,
-        threadId,
-      });
+      this.#appendToMessage(threadId, itemId, delta, messages[idx].role, messages[idx].kind ?? kind);
+      return;
     }
+    this.#appendToMessage(threadId, itemId, delta, "tool", kind);
+  }
+
+  #clearStreaming(threadId: string, itemId: string) {
+    const key = `${threadId}:${itemId}`;
+    if (this.#streamingText.delete(key)) {
+      this.#streamingText = new Map(this.#streamingText);
+    }
+  }
+
+  #getReasoningState(threadId: string): ReasoningState {
+    const existing = this.#reasoningByThread.get(threadId);
+    if (existing) return existing;
+    const next: ReasoningState = { buffer: "", full: "", mode: null, header: null };
+    this.#reasoningByThread.set(threadId, next);
+    return next;
+  }
+
+  #resetReasoningState(threadId: string) {
+    this.#reasoningByThread.set(threadId, { buffer: "", full: "", mode: null, header: null });
+  }
+
+  #appendReasoningDelta(threadId: string, delta: string, mode: ReasoningMode) {
+    const state = this.#getReasoningState(threadId);
+    if (state.mode === "raw" && mode === "summary") return;
+    if (!state.mode || mode === "raw") {
+      state.mode = mode;
+    }
+    state.buffer += delta;
+    const header = this.#extractFirstBold(state.buffer);
+    if (header) {
+      state.header = header;
+      this.#statusDetail = header;
+    }
+  }
+
+  #reasoningSectionBreak(threadId: string) {
+    const state = this.#getReasoningState(threadId);
+    if (state.buffer) {
+      state.full += state.buffer;
+      state.buffer = "";
+    }
+    state.full += "\n\n";
+  }
+
+  #finaliseReasoning(threadId: string, item: Record<string, unknown>) {
+    const state = this.#getReasoningState(threadId);
+    if (state.buffer) {
+      state.full += state.buffer;
+      state.buffer = "";
+    }
+
+    const fromItem = this.#reasoningTextFromItem(item);
+    const full = state.full.trim().length > 0 ? state.full : fromItem;
+    state.full = "";
+    state.mode = null;
+    state.header = null;
+
+    const summary = this.#extractReasoningSummary(full);
+    if (!summary) return;
+
+    const itemId = (item.id as string) || `reasoning-${threadId}-${Date.now()}`;
+    this.#upsert(threadId, {
+      id: itemId,
+      role: "assistant",
+      kind: "reasoning",
+      text: summary,
+      threadId,
+    });
+  }
+
+  #reasoningTextFromItem(item: Record<string, unknown>): string {
+    const summary = Array.isArray(item.summary) ? item.summary.join("") : "";
+    const content = Array.isArray(item.content) ? item.content.join("") : "";
+    return (content || summary).trim();
+  }
+
+  #extractFirstBold(text: string): string | null {
+    const match = text.match(/\*\*(.+?)\*\*/s);
+    return match?.[1]?.trim() || null;
+  }
+
+  #extractReasoningSummary(text: string): string {
+    const trimmed = text.trim();
+    if (!trimmed) return "";
+    const open = trimmed.indexOf("**");
+    if (open >= 0) {
+      const afterOpen = trimmed.slice(open + 2);
+      const close = afterOpen.indexOf("**");
+      if (close >= 0) {
+        const afterCloseIdx = open + 2 + close + 2;
+        if (afterCloseIdx < trimmed.length) {
+          return trimmed.slice(afterCloseIdx).trim();
+        }
+      }
+    }
+    return trimmed;
   }
 
   handleMessage(msg: RpcMessage) {
@@ -95,6 +327,12 @@ class MessagesStore {
           text,
           threadId,
         });
+      } else if (type === "commandExecution") {
+        const itemId = item.id as string;
+        const command = (item.command as string) || "";
+        if (itemId && command) {
+          this.#execCommands.set(itemId, command);
+        }
       }
       return;
     }
@@ -102,32 +340,172 @@ class MessagesStore {
     // Agent message delta (streaming)
     if (method === "item/agentMessage/delta") {
       const delta = (params.delta as string) || "";
-      const itemId = (params.itemId as string) || `agent-${threadId}`;
+      const itemId = (params.itemId as string) || (params.item_id as string) || `agent-${threadId}`;
       this.#updateStreaming(threadId, itemId, delta);
       return;
     }
 
-    // Reasoning delta
+    // Reasoning summary delta
+    if (method === "item/reasoning/summaryTextDelta") {
+      const delta = (params.delta as string) || "";
+      if (delta) {
+        this.#appendReasoningDelta(threadId, delta, "summary");
+      }
+      return;
+    }
+
+    // Reasoning content delta (raw)
     if (method === "item/reasoning/textDelta") {
       const delta = (params.delta as string) || "";
-      const itemId = (params.itemId as string) || `reasoning-${threadId}`;
+      if (delta) {
+        this.#appendReasoningDelta(threadId, delta, "raw");
+      }
+      return;
+    }
 
-      const messages = this.#byThread.get(threadId) ?? [];
-      const existing = messages.find((m) => m.id === itemId);
+    // Reasoning section break
+    if (method === "item/reasoning/summaryPartAdded") {
+      this.#reasoningSectionBreak(threadId);
+      return;
+    }
 
-      if (existing) {
-        this.#updateStreaming(threadId, itemId, delta);
-      } else {
-        const key = `${threadId}:${itemId}`;
-        this.#streamingText.set(key, delta);
-        this.#add(threadId, {
-          id: itemId,
-          role: "assistant",
-          kind: "reasoning",
-          text: delta,
+    // Terminal interaction (interactive command)
+    if (method === "item/commandExecution/terminalInteraction") {
+      const stdin = (params.stdin as string) || "";
+      const processId = (params.processId as string) || (params.process_id as string) || "";
+      const itemId = (params.itemId as string) || (params.item_id as string) || "";
+      const key = processId || itemId || `terminal-${threadId}`;
+      const command = itemId ? this.#execCommands.get(itemId) : null;
+      const waitingLine = command ? `(waiting for ${command})` : "(waiting for command output)";
+      const waitId = `terminal-wait-${key}`;
+      const messageId = `terminal-${key}`;
+      const trimmed = stdin.replace(/\r?\n$/, "");
+
+      if (!stdin) {
+        this.#upsert(threadId, {
+          id: waitId,
+          role: "tool",
+          kind: "wait",
+          text: waitingLine,
           threadId,
         });
+        return;
       }
+
+      this.#remove(threadId, waitId);
+      if (trimmed) {
+        this.#appendToMessage(threadId, messageId, `${trimmed}\n`, "tool", "terminal");
+      }
+      return;
+    }
+
+    // Command execution output delta (streaming)
+    if (method === "item/commandExecution/outputDelta") {
+      const delta = (params.delta as string) || "";
+      const itemId = (params.itemId as string) || (params.item_id as string) || `cmd-${threadId}`;
+      this.#updateStreamingTool(threadId, itemId, delta, "command");
+      return;
+    }
+
+    // File change output delta (streaming)
+    if (method === "item/fileChange/outputDelta") {
+      const delta = (params.delta as string) || "";
+      const itemId = (params.itemId as string) || (params.item_id as string) || `file-${threadId}`;
+      this.#updateStreamingTool(threadId, itemId, delta, "file");
+      return;
+    }
+
+    // MCP tool call progress
+    if (method === "item/mcpToolCall/progress") {
+      const message = (params.message as string) || "";
+      const itemId = (params.itemId as string) || (params.item_id as string) || `mcp-${threadId}`;
+      this.#updateStreamingTool(threadId, itemId, message + "\n", "mcp");
+      return;
+    }
+
+    // Turn started
+    if (method === "turn/started") {
+      const turn = params.turn as { id: string; status?: string } | undefined;
+      if (turn) {
+        this.#currentTurnId = turn.id;
+        this.#currentTurnStatus = (turn.status as TurnStatus) || "InProgress";
+        this.#currentPlan = [];
+        this.#planExplanation = null;
+        this.#statusDetail = null;
+        this.#resetReasoningState(threadId);
+      }
+      return;
+    }
+
+    // Turn completed
+    if (method === "turn/completed") {
+      const turn = params.turn as { id: string; status?: string } | undefined;
+      if (turn) {
+        this.#currentTurnStatus = (turn.status as TurnStatus) || "Completed";
+        this.#statusDetail = null;
+      }
+      return;
+    }
+
+    // Turn plan updated
+    if (method === "turn/plan/updated") {
+      const explanation = params.explanation as string | undefined;
+      const plan = params.plan as Array<{ step: string; status: string }> | undefined;
+
+      if (explanation) {
+        this.#planExplanation = explanation;
+      }
+      if (plan) {
+        this.#currentPlan = plan.map((p) => ({
+          step: p.step,
+          status: p.status as PlanStep["status"],
+        }));
+      }
+      return;
+    }
+
+    // Approval requests (file changes, commands, etc.)
+    if (method?.includes("/requestApproval")) {
+      const itemId = (params.itemId as string) || `approval-${Date.now()}`;
+      const reason = (params.reason as string) || null;
+      const rpcId = msg.id as number;  // Capture the request ID for response
+
+      // Determine type from method name
+      let approvalType: ApprovalRequest["type"] = "other";
+      let description = "";
+
+      if (method === "item/fileChange/requestApproval") {
+        approvalType = "file";
+        description = reason || "File change requires approval";
+      } else if (method === "item/commandExecution/requestApproval") {
+        approvalType = "command";
+        description = reason || "Command execution requires approval";
+      } else if (method === "item/mcpToolCall/requestApproval") {
+        approvalType = "mcp";
+        description = reason || "MCP tool call requires approval";
+      } else {
+        description = reason || "Action requires approval";
+      }
+
+      const approval: ApprovalRequest = {
+        id: itemId,
+        rpcId,  // Store the RPC ID so we can respond to it
+        type: approvalType,
+        description,
+        status: "pending",
+      };
+
+      this.#pendingApprovals.set(itemId, approval);
+      this.#pendingApprovals = new Map(this.#pendingApprovals);
+
+      this.#add(threadId, {
+        id: `approval-${itemId}`,
+        role: "approval",
+        kind: "approval-request",
+        text: description,
+        threadId,
+        approval,
+      });
       return;
     }
 
@@ -136,42 +514,81 @@ class MessagesStore {
       const item = params.item as Record<string, unknown>;
       if (!item) return;
 
-      const itemId = item.id as string;
+      const itemId = (item.id as string) || `item-${Date.now()}`;
       const type = item.type as string;
 
-      let role: Message["role"] = "tool";
-      let kind: Message["kind"];
-      let text = "";
-
       switch (type) {
-        case "commandExecution":
-          kind = "command";
-          text = `$ ${item.command}\n${item.aggregatedOutput || ""}`;
-          break;
-        case "fileChange": {
-          kind = "file";
-          const changes = item.changes as Array<{ path: string; diff?: string }>;
-          text = changes?.map((c) => `${c.path}\n${c.diff || ""}`).join("\n\n") || "";
-          break;
+        case "agentMessage": {
+          const text = (item.text as string) || "";
+          if (!text) return;
+          this.#upsert(threadId, { id: itemId, role: "assistant", text, threadId });
+          this.#clearStreaming(threadId, itemId);
+          return;
         }
-        case "mcpToolCall":
-          kind = "mcp";
-          text = `Tool: ${item.tool}\n${JSON.stringify(item.result, null, 2)}`;
-          break;
-        case "webSearch":
-          kind = "web";
-          text = `Search: ${item.query}`;
-          break;
+        case "reasoning":
+          this.#finaliseReasoning(threadId, item);
+          return;
+        case "commandExecution": {
+          const command = (item.command as string) || "";
+          const output = (item.aggregatedOutput as string) || "";
+          const text = command ? `$ ${command}\n${output}` : output;
+          const exitCode = typeof item.exitCode === "number" ? item.exitCode : null;
+          this.#upsert(threadId, {
+            id: itemId,
+            role: "tool",
+            kind: "command",
+            text,
+            threadId,
+            metadata: exitCode !== null ? { exitCode } : undefined,
+          });
+          this.#clearStreaming(threadId, itemId);
+          this.#execCommands.delete(itemId);
+          return;
+        }
+        case "fileChange": {
+          const changes = item.changes as Array<{ path: string; diff?: string }>;
+          const text = changes?.map((c) => `${c.path}\n${c.diff || ""}`).join("\n\n") || "";
+          this.#upsert(threadId, { id: itemId, role: "tool", kind: "file", text, threadId });
+          this.#clearStreaming(threadId, itemId);
+          return;
+        }
+        case "mcpToolCall": {
+          const result = item.error ?? item.result ?? "";
+          const text = `Tool: ${item.tool}\n${result ? JSON.stringify(result, null, 2) : ""}`;
+          this.#upsert(threadId, { id: itemId, role: "tool", kind: "mcp", text, threadId });
+          this.#clearStreaming(threadId, itemId);
+          return;
+        }
+        case "webSearch": {
+          const text = `Search: ${item.query}`;
+          this.#upsert(threadId, { id: itemId, role: "tool", kind: "web", text, threadId });
+          return;
+        }
+        case "imageView": {
+          const text = `Image: ${item.path ?? ""}`;
+          this.#upsert(threadId, { id: itemId, role: "tool", kind: "image", text, threadId });
+          return;
+        }
+        case "enteredReviewMode": {
+          const review = (item.review as string) || "";
+          const text = review ? `Review started: ${review}` : "Review started.";
+          this.#upsert(threadId, { id: itemId, role: "tool", kind: "review", text, threadId });
+          return;
+        }
+        case "exitedReviewMode": {
+          const review = (item.review as string) || "";
+          const text = review || "Review complete.";
+          this.#upsert(threadId, { id: itemId, role: "tool", kind: "review", text, threadId });
+          return;
+        }
         default:
           return;
       }
-
-      this.#add(threadId, { id: itemId, role, kind, text, threadId });
     }
   }
 
   #extractThreadId(params: Record<string, unknown>): string | null {
-    return (params.threadId as string) || null;
+    return (params.threadId as string) || (params.thread_id as string) || null;
   }
 
   #loadThread(threadId: string, turns: Array<{ items?: unknown[] }>) {
@@ -202,23 +619,25 @@ class MessagesStore {
             break;
 
           case "reasoning": {
-            const summary = item.summary as string[];
-            const text = summary?.[0] || "";
-            if (text) {
-              messages.push({ id, role: "assistant", kind: "reasoning", text, threadId });
-            }
+            const text = this.#extractReasoningSummary(this.#reasoningTextFromItem(item));
+            if (text) messages.push({ id, role: "assistant", kind: "reasoning", text, threadId });
             break;
           }
 
-          case "commandExecution":
+          case "commandExecution": {
+            const command = (item.command as string) || "";
+            const output = (item.aggregatedOutput as string) || "";
+            const exitCode = typeof item.exitCode === "number" ? item.exitCode : null;
             messages.push({
               id,
               role: "tool",
               kind: "command",
-              text: `$ ${item.command}\n${item.aggregatedOutput || ""}`,
+              text: command ? `$ ${command}\n${output}` : output,
               threadId,
+              metadata: exitCode !== null ? { exitCode } : undefined,
             });
             break;
+          }
 
           case "fileChange": {
             const changes = item.changes as Array<{ path: string; diff?: string }>;
@@ -237,10 +656,54 @@ class MessagesStore {
               id,
               role: "tool",
               kind: "mcp",
-              text: `Tool: ${item.tool}\n${JSON.stringify(item.result, null, 2)}`,
+              text: `Tool: ${item.tool}\n${JSON.stringify(item.error ?? item.result ?? "", null, 2)}`,
               threadId,
             });
             break;
+
+          case "webSearch":
+            messages.push({
+              id,
+              role: "tool",
+              kind: "web",
+              text: `Search: ${item.query}`,
+              threadId,
+            });
+            break;
+
+          case "imageView":
+            messages.push({
+              id,
+              role: "tool",
+              kind: "image",
+              text: `Image: ${item.path ?? ""}`,
+              threadId,
+            });
+            break;
+
+          case "enteredReviewMode": {
+            const review = (item.review as string) || "";
+            messages.push({
+              id,
+              role: "tool",
+              kind: "review",
+              text: review ? `Review started: ${review}` : "Review started.",
+              threadId,
+            });
+            break;
+          }
+
+          case "exitedReviewMode": {
+            const review = (item.review as string) || "";
+            messages.push({
+              id,
+              role: "tool",
+              kind: "review",
+              text: review || "Review complete.",
+              threadId,
+            });
+            break;
+          }
         }
       }
     }

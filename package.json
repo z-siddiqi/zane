@@ -9,6 +9,7 @@
     "migrate": "bash scripts/migrate.sh"
   },
   "dependencies": {
+    "highlight.js": "^11.11.1",
     "sv-router": "^0.13.0",
     "svelte": "^5.0.0"
   },
