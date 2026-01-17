@@ -32,6 +32,12 @@
     cancelled: { text: "CANCELLED", color: "var(--cli-text-muted)" },
   };
 
+  function handleOptionClick(index: number) {
+    if (approval.status !== "pending") return;
+    selectedIndex = index;
+    options[index].action();
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (approval.status !== "pending") return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -100,12 +106,17 @@
 
     {#if approval.status === "pending"}
       {#each options as option, i}
-        <div class="line option" class:selected={i === selectedIndex}>
+        <button
+          type="button"
+          class="line option"
+          class:selected={i === selectedIndex}
+          onclick={() => handleOptionClick(i)}
+        >
           <span class="border">│</span>
           <span class="selector">{i === selectedIndex ? "›" : " "}</span>
           <span class="key">[{option.key}]</span>
           <span class="option-label">{option.label}</span>
-        </div>
+        </button>
       {/each}
     {:else}
       <div class="line status">
@@ -188,7 +199,11 @@
   }
 
   .line.option {
+    background: transparent;
+    border: none;
     cursor: pointer;
+    text-align: left;
+    width: 100%;
   }
 
   .line.option:hover {
