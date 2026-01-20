@@ -1,4 +1,4 @@
-import type { WsClient } from "./types.ts";
+import type { WsClient } from "./types";
 
 const PORT = Number(process.env.ANCHOR_PORT ?? 8788);
 const AUTH_TOKEN = process.env.ANCHOR_TOKEN ?? "";
@@ -147,8 +147,12 @@ function connectOrbit(): void {
         : event.data instanceof ArrayBuffer
           ? new TextDecoder().decode(event.data)
           : new TextDecoder().decode(event.data as ArrayBuffer);
-    if (isJsonRpcMessage(text)) {
-      sendToAppServer(normalizeLine(text));
+
+    const message = parseJsonRpcMessage(text);
+
+    // Forward JSON-RPC messages to app-server
+    if (message && ("method" in message || "id" in message)) {
+      sendToAppServer(text.trim() + "\n");
     }
   });
 
@@ -163,15 +167,6 @@ function connectOrbit(): void {
     orbitConnecting = false;
     setTimeout(connectOrbit, ORBIT_RECONNECT_MS);
   });
-}
-
-function normalizeLine(input: string): string {
-  const trimmed = input.replace(/\r?\n$/, "");
-  return `${trimmed}\n`;
-}
-
-function isJsonRpcMessage(payload: string): boolean {
-  return parseJsonRpcMessage(payload) !== null;
 }
 
 async function streamLines(
@@ -223,19 +218,15 @@ const server = Bun.serve({
     open(ws) {
       clients.add(ws as WsClient);
       ensureAppServer();
-      ws.send(
-        JSON.stringify({
-          type: "anchor.hello",
-          ts: new Date().toISOString(),
-        }),
-      );
+      ws.send(JSON.stringify({ type: "anchor.hello", ts: new Date().toISOString() }));
     },
     message(_ws, message) {
       ensureAppServer();
       if (!appServer) return;
       const text = typeof message === "string" ? message : new TextDecoder().decode(message);
-      if (isJsonRpcMessage(text)) {
-        sendToAppServer(normalizeLine(text));
+      const parsed = parseJsonRpcMessage(text);
+      if (parsed && ("method" in parsed || "id" in parsed)) {
+        sendToAppServer(text.trim() + "\n");
       }
     },
     close(ws) {

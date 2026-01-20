@@ -6,7 +6,7 @@
     "dev": "bunx --bun vite",
     "build": "bunx --bun vite build",
     "preview": "bunx --bun vite preview --port 4173",
-    "migrate": "bash scripts/migrate.sh"
+    "migrate": "bunx wrangler d1 migrations apply zane --remote"
   },
   "dependencies": {
     "@pierre/diffs": "^1.0.6",

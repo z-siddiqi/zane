@@ -1,22 +1,14 @@
-PRAGMA journal_mode = WAL;
-PRAGMA busy_timeout = 5000;
-
-CREATE TABLE IF NOT EXISTS deliveries (
-  delivery_id TEXT PRIMARY KEY,
-  event TEXT NOT NULL,
-  action TEXT,
-  received_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS webhook_events (
+-- Events (WebSocket relay logs)
+CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  delivery_id TEXT NOT NULL,
-  event TEXT NOT NULL,
-  action TEXT,
-  repo_full_name TEXT,
-  payload_json TEXT,
-  created_at INTEGER NOT NULL,
-  FOREIGN KEY(delivery_id) REFERENCES deliveries(delivery_id)
+  thread_id TEXT NOT NULL,
+  turn_id TEXT,
+  direction TEXT NOT NULL,
+  role TEXT NOT NULL,
+  method TEXT,
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_events_delivery ON webhook_events(delivery_id);
+CREATE INDEX IF NOT EXISTS idx_events_thread ON events(thread_id, id);
+CREATE INDEX IF NOT EXISTS idx_events_method ON events(method);

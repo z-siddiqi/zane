@@ -3,7 +3,7 @@ type Direction = "client" | "server";
 
 export interface Env {
   ORBIT_TOKEN?: string;
-  ORBIT_DB?: D1Database;
+  DB?: D1Database;
   ORBIT_DO: DurableObjectNamespace;
 }
 
@@ -104,7 +104,7 @@ function extractMethod(message: Record<string, unknown>): string | null {
 }
 
 async function fetchThreadEvents(req: Request, env: Env, origin: string | null): Promise<Response> {
-  if (!env.ORBIT_DB) {
+  if (!env.DB) {
     return new Response("D1 not configured", { status: 501, headers: corsHeaders(origin) });
   }
   const url = new URL(req.url);
@@ -114,11 +114,9 @@ async function fetchThreadEvents(req: Request, env: Env, origin: string | null):
     return new Response("Not found", { status: 404, headers: corsHeaders(origin) });
   }
 
-  const query = env.ORBIT_DB.prepare("SELECT entry_json FROM orbit_events WHERE thread_id = ? ORDER BY id ASC").bind(
-    threadId,
-  );
-  const { results } = await query.all<{ entry_json: string }>();
-  const lines = results.map((row) => row.entry_json).join("\n");
+  const query = env.DB.prepare("SELECT payload FROM events WHERE thread_id = ? ORDER BY id ASC").bind(threadId);
+  const { results } = await query.all<{ payload: string }>();
+  const lines = results.map((row) => row.payload).join("\n");
   const body = lines ? `${lines}\n` : "";
 
   return new Response(body, {
@@ -240,20 +238,20 @@ export class OrbitRelay {
   }
 
   private async logEvent(data: unknown, direction: Direction): Promise<void> {
-    if (!this.env.ORBIT_DB) return;
+    if (!this.env.DB) return;
 
-    let payload = "";
+    let payloadStr = "";
     if (typeof data === "string") {
-      payload = data;
+      payloadStr = data;
     } else if (data instanceof ArrayBuffer) {
-      payload = new TextDecoder().decode(data);
+      payloadStr = new TextDecoder().decode(data);
     } else if (data instanceof Uint8Array) {
-      payload = new TextDecoder().decode(data);
+      payloadStr = new TextDecoder().decode(data);
     } else {
       return;
     }
 
-    const message = parseJsonMessage(payload);
+    const message = parseJsonMessage(payloadStr);
     if (!message) return;
 
     const threadId = extractThreadId(message);
@@ -268,17 +266,17 @@ export class OrbitRelay {
     };
 
     try {
-      await this.env.ORBIT_DB.prepare(
-        "INSERT INTO orbit_events (thread_id, ts, direction, role, method, turn_id, entry_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      await this.env.DB.prepare(
+        "INSERT INTO events (thread_id, turn_id, direction, role, method, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       )
         .bind(
           threadId,
-          entry.ts,
+          turnId,
           direction,
           direction === "client" ? "client" : "anchor",
           method,
-          turnId,
           JSON.stringify(entry),
+          Math.floor(Date.now() / 1000),
         )
         .run();
     } catch (err) {
