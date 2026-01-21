@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { Message } from "../types";
-  import OutputBlock from "./OutputBlock.svelte";
   import ShimmerDot from "./ShimmerDot.svelte";
   import Reasoning from "./Reasoning.svelte";
+  import Tool from "./Tool.svelte";
 
   interface Props {
     message: Message;
@@ -11,15 +11,19 @@
   let { message }: Props = $props();
 
   const isReasoning = $derived(message.role === "assistant" && message.kind === "reasoning");
+  const isTool = $derived(
+    message.role === "tool" &&
+    message.kind !== "terminal" &&
+    message.kind !== "wait"
+  );
+  const isTerminal = $derived(message.role === "tool" && message.kind === "terminal");
+  const isWait = $derived(message.role === "tool" && message.kind === "wait");
 
   const prefixConfig = $derived.by(() => {
     if (message.role === "user") {
       return { prefix: "▌", color: "var(--cli-prefix-user)", bgClass: "user-bg" };
     }
     if (message.role === "assistant") {
-      if (message.kind === "reasoning") {
-        return { prefix: "•", color: "var(--cli-prefix-reasoning)", bgClass: "" };
-      }
       return { prefix: "•", color: "var(--cli-prefix-agent)", bgClass: "" };
     }
     if (message.role === "tool") {
@@ -28,29 +32,11 @@
     return { prefix: "•", color: "var(--cli-text-dim)", bgClass: "" };
   });
 
-  const isToolOutput = $derived(message.role === "tool" && (message.kind === "command" || message.kind === "file"));
-  const isTerminal = $derived(message.role === "tool" && message.kind === "terminal");
-  const isWait = $derived(message.role === "tool" && message.kind === "wait");
-
   const terminalLines = $derived.by(() => {
     if (!isTerminal) return [];
     const lines = message.text.split("\n");
     if (lines[lines.length - 1] === "") lines.pop();
     return lines;
-  });
-
-  // Extract command from text like "$ git status\noutput..."
-  const commandInfo = $derived.by(() => {
-    if (message.kind !== "command") return null;
-    const lines = message.text.split("\n");
-    const firstLine = lines[0] || "";
-    if (firstLine.startsWith("$ ")) {
-      return {
-        command: firstLine.slice(2),
-        output: lines.slice(1).join("\n")
-      };
-    }
-    return { command: null, output: message.text };
   });
 </script>
 
@@ -60,12 +46,8 @@
       content={message.text}
       defaultOpen={false}
     />
-  {:else if isToolOutput && commandInfo}
-    <OutputBlock
-      text={commandInfo.output}
-      command={commandInfo.command}
-      exitCode={message.metadata?.exitCode ?? null}
-    />
+  {:else if isTool}
+    <Tool {message} />
   {:else if isWait}
     <div class="message-line wait">
       <span class="prefix" style:color={prefixConfig.color}>{prefixConfig.prefix}</span>

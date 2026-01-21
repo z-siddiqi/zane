@@ -55,9 +55,15 @@
   --cli-prefix-agent: #16a34a;
   --cli-prefix-tool: #d97706;
   --cli-prefix-reasoning: #7c3aed;
+  --cli-prefix-file: #0891b2;
+  --cli-prefix-mcp: #7c3aed;
+  --cli-prefix-web: #0d9488;
+  --cli-prefix-image: #db2777;
+  --cli-prefix-review: #6366f1;
   --cli-success: #16a34a;
   --cli-error: #dc2626;
   --cli-border: #e5e7eb;
+  --cli-bg-hover: #f3f4f6;
   --cli-selection: rgba(22, 163, 74, 0.1);
 
   /* Chrome (non-code UI) */
@@ -110,9 +116,15 @@
     --cli-prefix-agent: #4ade80;
     --cli-prefix-tool: #fbbf24;
     --cli-prefix-reasoning: #c084fc;
+    --cli-prefix-file: #22d3ee;
+    --cli-prefix-mcp: #a78bfa;
+    --cli-prefix-web: #2dd4bf;
+    --cli-prefix-image: #f472b6;
+    --cli-prefix-review: #818cf8;
     --cli-success: #4ade80;
     --cli-error: #f87171;
     --cli-border: #374151;
+    --cli-bg-hover: #2d2d2d;
     --cli-selection: rgba(74, 222, 128, 0.2);
 
     /* Chrome (non-code UI) */
@@ -162,9 +174,15 @@
   --cli-prefix-agent: #4ade80;
   --cli-prefix-tool: #fbbf24;
   --cli-prefix-reasoning: #c084fc;
+  --cli-prefix-file: #22d3ee;
+  --cli-prefix-mcp: #a78bfa;
+  --cli-prefix-web: #2dd4bf;
+  --cli-prefix-image: #f472b6;
+  --cli-prefix-review: #818cf8;
   --cli-success: #4ade80;
   --cli-error: #f87171;
   --cli-border: #374151;
+  --cli-bg-hover: #2d2d2d;
   --cli-selection: rgba(74, 222, 128, 0.2);
 
   /* Chrome (non-code UI) */
