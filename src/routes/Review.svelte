@@ -1,6 +1,7 @@
 <script lang="ts">
     import { route } from "../router";
     import { config } from "../lib/config.svelte";
+    import { auth } from "../lib/auth.svelte";
     import { socket } from "../lib/socket.svelte";
     import ShimmerDot from "../lib/components/ShimmerDot.svelte";
     import "../lib/styles/tokens.css";
@@ -354,8 +355,8 @@
 
         try {
             const headers: Record<string, string> = {};
-            if (config.token) {
-                headers.authorization = `Bearer ${config.token}`;
+            if (auth.token) {
+                headers.authorization = `Bearer ${auth.token}`;
             }
             const response = await fetch(`${base}/threads/${threadId}/events`, { headers });
             if (!response.ok) {

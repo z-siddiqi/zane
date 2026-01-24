@@ -3,6 +3,7 @@
   import { threads } from "../lib/threads.svelte";
   import { config } from "../lib/config.svelte";
   import { theme, type Theme } from "../lib/theme.svelte";
+  import { auth } from "../lib/auth.svelte";
   import ShimmerDot from "../lib/components/ShimmerDot.svelte";
   import "../lib/styles/tokens.css";
 
@@ -11,7 +12,7 @@
       socket.disconnect();
       threads.list = [];
     } else {
-      socket.connect(config.url, config.token);
+      socket.connect(config.url, auth.token);
     }
   }
 
@@ -63,11 +64,19 @@
 
       <button
         type="button"
-        class="theme-toggle"
+        class="header-btn"
         onclick={() => theme.cycle()}
         title="Theme: {theme.current}"
       >
         {themeIcons[theme.current]}
+      </button>
+      <button
+        type="button"
+        class="header-btn"
+        onclick={() => auth.signOut()}
+        title="Sign out"
+      >
+        ⏻
       </button>
     </div>
   </header>
@@ -80,16 +89,6 @@
         type="text"
         bind:value={config.url}
         placeholder="ws://localhost:8788/ws"
-        disabled={socket.status === "connected"}
-      />
-    </div>
-    <div class="field">
-      <label for="token">token</label>
-      <input
-        id="token"
-        type="password"
-        bind:value={config.token}
-        placeholder="(optional)"
         disabled={socket.status === "connected"}
       />
     </div>
@@ -205,7 +204,7 @@
     flex: 1;
   }
 
-  .theme-toggle {
+  .header-btn {
     padding: var(--space-xs) var(--space-sm);
     background: transparent;
     border: 1px solid var(--cli-border);
@@ -217,7 +216,7 @@
     transition: all var(--transition-fast);
   }
 
-  .theme-toggle:hover {
+  .header-btn:hover {
     background: var(--cli-selection);
     color: var(--cli-text);
   }

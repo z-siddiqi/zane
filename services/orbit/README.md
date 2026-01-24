@@ -19,9 +19,13 @@ bun run dev
 
 ## Auth
 
-If `ORBIT_TOKEN` is set, provide it as:
-- `Authorization: Bearer <token>` header, or
-- `?token=<token>` query param (for browsers)
+Orbit expects a passkey session JWT from the auth service:
+- `Authorization: Bearer <jwt>` header, or
+- `?token=<jwt>` query param (for browsers)
+
+For Anchor service-to-service auth, set `ZANE_ANCHOR_JWT_SECRET` and use a JWT with:
+- `iss: "zane-anchor"`
+- `aud: "zane-orbit-anchor"`
 
 ## D1 events storage
 

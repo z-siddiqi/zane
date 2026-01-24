@@ -2,10 +2,17 @@ type Role = "client" | "anchor";
 type Direction = "client" | "server";
 
 export interface Env {
-  ORBIT_TOKEN?: string;
+  ZANE_WEB_JWT_SECRET?: string;
+  ZANE_ANCHOR_JWT_SECRET?: string;
   DB?: D1Database;
   ORBIT_DO: DurableObjectNamespace;
 }
+
+const JWT_ISSUER_WEB = "zane-auth";
+const JWT_AUDIENCE_WEB = "zane-web";
+const JWT_ISSUER_ANCHOR = "zane-anchor";
+const JWT_AUDIENCE_ANCHOR = "zane-orbit-anchor";
+const JWT_CLOCK_SKEW_SEC = 30;
 
 function getAuthToken(req: Request): string | null {
   const auth = req.headers.get("authorization") ?? "";
@@ -16,11 +23,103 @@ function getAuthToken(req: Request): string | null {
   return url.searchParams.get("token");
 }
 
-function isAuthorised(req: Request, env: Env): boolean {
-  const required = env.ORBIT_TOKEN ?? "";
-  if (!required) return true;
-  const provided = getAuthToken(req) ?? "";
-  return provided === required;
+function base64UrlToBytes(input: string): Uint8Array {
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function parseJwtPart<T>(part: string): T | null {
+  try {
+    const text = new TextDecoder().decode(base64UrlToBytes(part));
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function verifyJwtHs256(
+  token: string,
+  secret: string,
+  expected: { issuer: string; audience: string },
+): Promise<boolean> {
+  const [headerPart, payloadPart, signaturePart] = token.split(".");
+  if (!headerPart || !payloadPart || !signaturePart) return false;
+
+  const header = parseJwtPart<{ alg?: string }>(headerPart);
+  if (!header || header.alg !== "HS256") return false;
+
+  const payload = parseJwtPart<{
+    iss?: string;
+    aud?: string | string[];
+    exp?: number;
+  }>(payloadPart);
+  if (!payload) return false;
+  if (payload.iss !== expected.issuer) return false;
+  if (payload.aud) {
+    const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+    if (!audiences.includes(expected.audience)) return false;
+  }
+  if (typeof payload.exp === "number") {
+    const now = Math.floor(Date.now() / 1000);
+    if (now > payload.exp + JWT_CLOCK_SKEW_SEC) return false;
+  }
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"],
+  );
+  const data = new TextEncoder().encode(`${headerPart}.${payloadPart}`);
+  const signature = base64UrlToBytes(signaturePart);
+  return await crypto.subtle.verify("HMAC", key, signature, data);
+}
+
+async function isAuthorised(req: Request, env: Env): Promise<boolean> {
+  const userSecret = env.ZANE_WEB_JWT_SECRET?.trim();
+  const anchorSecret = env.ZANE_ANCHOR_JWT_SECRET?.trim();
+  if (!userSecret && !anchorSecret) {
+    console.error("[orbit] auth: no secrets configured, denying request");
+    return false;
+  }
+
+  const provided = (getAuthToken(req) ?? "").trim();
+  if (!provided) {
+    console.warn("[orbit] auth: missing token");
+    return false;
+  }
+
+  if (userSecret) {
+    const ok = await verifyJwtHs256(provided, userSecret, {
+      issuer: JWT_ISSUER_WEB,
+      audience: JWT_AUDIENCE_WEB,
+    });
+    if (ok) {
+      console.log("[orbit] auth: web JWT accepted");
+      return true;
+    }
+  }
+
+  if (anchorSecret) {
+    const ok = await verifyJwtHs256(provided, anchorSecret, {
+      issuer: JWT_ISSUER_ANCHOR,
+      audience: JWT_AUDIENCE_ANCHOR,
+    });
+    if (ok) {
+      console.log("[orbit] auth: anchor JWT accepted");
+      return true;
+    }
+  }
+
+  console.warn("[orbit] auth: token rejected");
+  return false;
 }
 
 function getRoleFromPath(pathname: string): Role | null {
@@ -142,6 +241,11 @@ export default {
     }
 
     if (req.method === "GET" && url.pathname.startsWith("/threads/") && url.pathname.endsWith("/events")) {
+      if (!(await isAuthorised(req, env))) {
+        console.warn(`[orbit] events auth failed: ${url.pathname}`);
+        return new Response("Unauthorised", { status: 401, headers: corsHeaders(origin) });
+      }
+      console.log(`[orbit] events request: ${url.pathname}`);
       return fetchThreadEvents(req, env, origin);
     }
 
@@ -150,7 +254,8 @@ export default {
       return new Response("Not found", { status: 404 });
     }
 
-    if (!isAuthorised(req, env)) {
+    if (!(await isAuthorised(req, env))) {
+      console.warn(`[orbit] ws auth failed: ${url.pathname}`);
       return new Response("Unauthorised", { status: 401 });
     }
 
@@ -158,6 +263,7 @@ export default {
       return new Response("Upgrade required", { status: 426 });
     }
 
+    console.log(`[orbit] ws upgrade accepted: ${url.pathname}`);
     const id = env.ORBIT_DO.idFromName("default");
     const stub = env.ORBIT_DO.get(id);
     const nextReq = new Request(req, { headers: new Headers(req.headers) });

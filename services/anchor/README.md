@@ -16,7 +16,9 @@ Requirements:
 
 Optional env:
 - `ANCHOR_ORBIT_URL` (e.g. `wss://orbit.<your-domain>.workers.dev/ws/anchor`)
-- `ANCHOR_ORBIT_TOKEN` (if Orbit is protected)
+- `ZANE_ANCHOR_JWT_SECRET` (shared secret for Orbit service-to-service auth)
+- `ANCHOR_JWT_TTL_SEC` (default `300`)
+- `ANCHOR_APP_CWD` (default `process.cwd()`; sent to app-server during init)
 - `ANCHOR_ORBIT_RECONNECT_MS` (default `2000`)
 Env is loaded from the repo root `.env` via the run scripts.
 

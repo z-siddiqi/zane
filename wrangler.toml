@@ -1,5 +1,5 @@
-# Database-only config for running migrations from root
-# Services have their own wrangler.toml for deployment
+name = "zane"
+pages_build_output_dir = "dist"
 
 [[d1_databases]]
 binding = "DB"

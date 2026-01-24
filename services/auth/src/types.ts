@@ -1,0 +1,28 @@
+import type { AuthenticatorTransport } from "@simplewebauthn/types";
+
+export interface StoredUser {
+  id: string;
+  name: string;
+  displayName: string;
+}
+
+export interface StoredCredential {
+  id: string;
+  userId: string;
+  publicKey: string;
+  counter: number;
+  transports?: AuthenticatorTransport[];
+  deviceType?: string;
+  backedUp: boolean;
+}
+
+export interface SessionPayload {
+  sub: string;
+  name: string;
+  jti: string;
+}
+
+export interface ChallengeRecord {
+  value: string;
+  expiresAt: number;
+}

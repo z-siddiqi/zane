@@ -6,7 +6,6 @@ class SocketStore {
 
   #socket: WebSocket | null = null;
   #url = "";
-  #token = "";
   #messageHandlers = new Set<(msg: RpcMessage) => void>();
   #connectHandlers = new Set<() => void>();
 
@@ -14,17 +13,12 @@ class SocketStore {
     return this.#url;
   }
 
-  get token() {
-    return this.#token;
-  }
-
-  connect(url: string, token: string) {
+  connect(url: string, token?: string | null) {
     if (this.#socket) {
       this.disconnect();
     }
 
     this.#url = url;
-    this.#token = token;
     this.status = "connecting";
     this.error = null;
 

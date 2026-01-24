@@ -3,12 +3,10 @@ const STORAGE_KEY = "zane_config";
 
 interface SavedConfig {
   url: string;
-  token: string;
 }
 
 class ConfigStore {
   #url = $state("wss://orbit.yrvgilpord.workers.dev/ws/client");
-  #token = $state("");
 
   constructor() {
     this.#load();
@@ -22,21 +20,12 @@ class ConfigStore {
     this.#save();
   }
 
-  get token() {
-    return this.#token;
-  }
-  set token(value: string) {
-    this.#token = value;
-    this.#save();
-  }
-
   #load() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const data = JSON.parse(saved) as SavedConfig;
         this.#url = data.url || this.#url;
-        this.#token = data.token || "";
       }
     } catch {
       // ignore
@@ -47,7 +36,6 @@ class ConfigStore {
     try {
       const data: SavedConfig = {
         url: this.#url,
-        token: this.#token,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch {

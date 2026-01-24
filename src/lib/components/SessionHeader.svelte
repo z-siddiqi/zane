@@ -114,8 +114,24 @@
     <div class="spacer"></div>
 
     {#if threadId}
-      <a class="review-link" href={`/thread/${threadId}/review`}>review</a>
+      <a class="header-btn" href={`/thread/${threadId}/review`}>review</a>
     {/if}
+    <button
+      type="button"
+      class="header-btn"
+      onclick={() => theme.cycle()}
+      title="Theme: {theme.current}"
+    >
+      {themeIcons[theme.current]}
+    </button>
+    <button
+      type="button"
+      class="header-btn"
+      onclick={() => auth.signOut()}
+      title="Sign out"
+    >
+      ⏻
+    </button>
   </div>
 </header>
 
@@ -297,18 +313,18 @@
     padding: var(--space-xs) var(--space-sm);
     border: 1px solid var(--cli-border);
     border-radius: var(--radius-sm);
+    background: transparent;
     color: var(--cli-text-dim);
     font-family: var(--font-mono);
     font-size: var(--text-xs);
     text-decoration: none;
-    text-transform: lowercase;
+    cursor: pointer;
     transition: all var(--transition-fast);
   }
 
-  .review-link:hover {
+  .header-btn:hover {
     background: var(--cli-selection);
     color: var(--cli-text);
     border-color: var(--cli-text-muted);
   }
-
 </style>
