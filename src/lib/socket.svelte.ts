@@ -1,4 +1,5 @@
 import type { ConnectionStatus, RpcMessage } from "./types";
+import { DEFAULT_WS_URL } from "./config.svelte";
 
 class SocketStore {
   status = $state<ConnectionStatus>("disconnected");
@@ -18,16 +19,22 @@ class SocketStore {
       this.disconnect();
     }
 
-    this.#url = url;
+    const trimmed = url.trim() || DEFAULT_WS_URL;
+    this.#url = trimmed;
     this.status = "connecting";
     this.error = null;
 
-    const wsUrl = new URL(url);
-    if (token) {
-      wsUrl.searchParams.set("token", token);
+    try {
+      const wsUrl = new URL(trimmed);
+      if (token) {
+        wsUrl.searchParams.set("token", token);
+      }
+      this.#socket = new WebSocket(wsUrl);
+    } catch {
+      this.status = "error";
+      this.error = "Invalid server URL";
+      return;
     }
-
-    this.#socket = new WebSocket(wsUrl);
 
     this.#socket.onopen = () => {
       this.status = "connected";

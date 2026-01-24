@@ -1,15 +1,8 @@
 <script lang="ts">
     import { socket } from "../lib/socket.svelte";
     import { threads } from "../lib/threads.svelte";
-    import ShimmerDot from "../lib/components/ShimmerDot.svelte";
+    import AppHeader from "../lib/components/AppHeader.svelte";
     import "../lib/styles/tokens.css";
-
-    const statusConfig = {
-        connected: { icon: "●", color: "var(--cli-success)", label: "connected" },
-        connecting: { icon: "○", color: "var(--cli-text-dim)", label: "connecting" },
-        disconnected: { icon: "○", color: "var(--cli-text-dim)", label: "disconnected" },
-        error: { icon: "✗", color: "var(--cli-error)", label: "error" },
-    } as const;
 
     const permissionPresets = {
         cautious: {
@@ -31,8 +24,6 @@
             sandbox: "danger-full-access",
         },
     } as const;
-
-    const statusMeta = $derived(statusConfig[socket.status]);
 
     let taskDir = $state("");
     let taskSummary = $state("");
@@ -58,26 +49,11 @@
 </script>
 
 <div class="task-page">
-    <header class="task-header">
-        <div class="task-header-inner">
-            <a class="brand" href="/">zane</a>
-            <span class="separator">·</span>
-            {#if socket.status === "connecting"}
-                <ShimmerDot color={statusMeta.color} />
-            {:else}
-                <span
-                    class="status-icon"
-                    style:color={statusMeta.color}
-                    title={statusMeta.label}
-                    aria-label={statusMeta.label}
-                >
-                    {statusMeta.icon}
-                </span>
-            {/if}
-            <div class="spacer"></div>
-            <a class="back-link" href="/">back</a>
-        </div>
-    </header>
+    <AppHeader status={socket.status}>
+        {#snippet actions()}
+            <a href="/">back</a>
+        {/snippet}
+    </AppHeader>
 
     <main class="task-body">
         <div class="task-body-inner">
@@ -134,55 +110,6 @@
         color: var(--cli-text);
         font-family: var(--font-mono);
         font-size: var(--text-sm);
-    }
-
-    .task-header {
-        background: var(--cli-bg-elevated);
-        width: 100vw;
-        margin-left: calc(50% - 50vw);
-        border-bottom: 1px solid var(--cli-border);
-    }
-
-
-    .task-header-inner {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-        padding: var(--space-sm) var(--space-md);
-        max-width: var(--app-max-width);
-        margin: 0 auto;
-    }
-
-    .brand {
-        font-weight: 600;
-        color: var(--cli-prefix-agent);
-        text-decoration: none;
-    }
-
-    .separator {
-        color: var(--cli-text-muted);
-    }
-
-    .status-icon {
-        line-height: 1;
-    }
-
-    .spacer {
-        flex: 1;
-    }
-
-    .back-link {
-        font-size: var(--text-xs);
-        color: var(--cli-text-dim);
-        text-decoration: none;
-        border: 1px solid var(--cli-border);
-        padding: var(--space-xs) var(--space-sm);
-        border-radius: var(--radius-sm);
-    }
-
-    .back-link:hover {
-        color: var(--cli-text);
-        border-color: var(--cli-text-muted);
     }
 
     .task-body {

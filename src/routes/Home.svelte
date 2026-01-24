@@ -2,10 +2,13 @@
   import { socket } from "../lib/socket.svelte";
   import { threads } from "../lib/threads.svelte";
   import { config } from "../lib/config.svelte";
-  import { theme, type Theme } from "../lib/theme.svelte";
+  import { theme } from "../lib/theme.svelte";
   import { auth } from "../lib/auth.svelte";
+  import AppHeader from "../lib/components/AppHeader.svelte";
   import ShimmerDot from "../lib/components/ShimmerDot.svelte";
   import "../lib/styles/tokens.css";
+
+  const themeIcons = { system: "◐", light: "○", dark: "●" } as const;
 
   function handleConnect() {
     if (socket.status === "connected") {
@@ -27,12 +30,6 @@
     });
   }
 
-  const themeIcons: Record<Theme, string> = {
-    system: "◐",
-    light: "○",
-    dark: "●",
-  };
-
   $effect(() => {
     if (socket.status === "connected") {
       threads.fetch();
@@ -41,45 +38,14 @@
 </script>
 
 <div class="home">
-  <header class="header">
-    <div class="header-inner">
-      <span class="brand">zane</span>
-      <span class="separator">·</span>
-      {#if socket.status === "connecting"}
-        <ShimmerDot color="var(--cli-text-dim)" />
-      {:else}
-        <span
-          class="status-icon"
-          class:connected={socket.status === "connected"}
-          class:error={socket.status === "error"}
-        >
-          {socket.status === "connected" ? "●" : socket.status === "error" ? "✗" : "○"}
-        </span>
-      {/if}
-      <span class="status-label" class:connected={socket.status === "connected"}>
-        {socket.status}
-      </span>
-
-      <div class="spacer"></div>
-
-      <button
-        type="button"
-        class="header-btn"
-        onclick={() => theme.cycle()}
-        title="Theme: {theme.current}"
-      >
+  <AppHeader status={socket.status}>
+    {#snippet actions()}
+      <button type="button" onclick={() => theme.cycle()} title="Theme: {theme.current}">
         {themeIcons[theme.current]}
       </button>
-      <button
-        type="button"
-        class="header-btn"
-        onclick={() => auth.signOut()}
-        title="Sign out"
-      >
-        ⏻
-      </button>
-    </div>
-  </header>
+      <button type="button" onclick={() => auth.signOut()} title="Sign out">⏻</button>
+    {/snippet}
+  </AppHeader>
 
   <div class="connection">
     <div class="field">
@@ -151,74 +117,6 @@
     color: var(--cli-text);
     font-family: var(--font-mono);
     font-size: var(--text-sm);
-  }
-
-  /* Header */
-  .header {
-    width: 100vw;
-    margin-left: calc(50% - 50vw);
-    background: var(--cli-bg-elevated);
-    border-bottom: 1px solid var(--cli-border);
-  }
-
-  .header-inner {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-    padding: var(--space-sm) var(--space-md);
-    max-width: var(--app-max-width);
-    margin: 0 auto;
-  }
-
-  .brand {
-    font-weight: 600;
-    color: var(--cli-prefix-agent);
-  }
-
-  .separator {
-    color: var(--cli-text-muted);
-  }
-
-  .status-icon {
-    color: var(--cli-text-muted);
-  }
-
-  .status-icon.connected {
-    color: var(--cli-success);
-  }
-
-  .status-icon.error {
-    color: var(--cli-error);
-  }
-
-  .status-label {
-    font-size: var(--text-xs);
-    color: var(--cli-text-dim);
-  }
-
-  .status-label.connected {
-    color: var(--cli-success);
-  }
-
-  .spacer {
-    flex: 1;
-  }
-
-  .header-btn {
-    padding: var(--space-xs) var(--space-sm);
-    background: transparent;
-    border: 1px solid var(--cli-border);
-    border-radius: var(--radius-sm);
-    color: var(--cli-text-dim);
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-
-  .header-btn:hover {
-    background: var(--cli-selection);
-    color: var(--cli-text);
   }
 
   /* Connection */

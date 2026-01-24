@@ -5,13 +5,17 @@
     import { threads } from "../lib/threads.svelte";
     import { messages } from "../lib/messages.svelte";
     import { models } from "../lib/models.svelte";
-    import SessionHeader from "../lib/components/SessionHeader.svelte";
+    import { theme } from "../lib/theme.svelte";
+    import { auth } from "../lib/auth.svelte";
+    import AppHeader from "../lib/components/AppHeader.svelte";
     import MessageBlock from "../lib/components/MessageBlock.svelte";
     import ApprovalPrompt from "../lib/components/ApprovalPrompt.svelte";
     import WorkingStatus from "../lib/components/WorkingStatus.svelte";
     import Reasoning from "../lib/components/Reasoning.svelte";
     import PromptInput from "../lib/components/PromptInput.svelte";
     import "../lib/styles/tokens.css";
+
+    const themeIcons = { system: "◐", light: "○", dark: "●" } as const;
 
     let model = $state("");
     let reasoningEffort = $state<ReasoningEffort>("medium");
@@ -82,12 +86,20 @@
 </script>
 
 <div class="thread-page">
-    <SessionHeader
+    <AppHeader
         status={socket.status}
         threadId={threadId}
         {sandbox}
         onSandboxChange={(v) => sandbox = v}
-    />
+    >
+        {#snippet actions()}
+            <a href={`/thread/${threadId}/review`}>review</a>
+            <button type="button" onclick={() => theme.cycle()} title="Theme: {theme.current}">
+                {themeIcons[theme.current]}
+            </button>
+            <button type="button" onclick={() => auth.signOut()} title="Sign out">⏻</button>
+        {/snippet}
+    </AppHeader>
 
     <div class="transcript" bind:this={container}>
         {#if messages.current.length === 0}

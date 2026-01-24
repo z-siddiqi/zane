@@ -3,16 +3,9 @@
     import { config } from "../lib/config.svelte";
     import { auth } from "../lib/auth.svelte";
     import { socket } from "../lib/socket.svelte";
-    import ShimmerDot from "../lib/components/ShimmerDot.svelte";
+    import AppHeader from "../lib/components/AppHeader.svelte";
     import "../lib/styles/tokens.css";
     import PierreDiff from "../lib/components/PierreDiff.svelte";
-
-    const statusConfig = {
-        connected: { icon: "●", color: "var(--cli-success)", label: "connected" },
-        connecting: { icon: "○", color: "var(--cli-text-dim)", label: "connecting" },
-        disconnected: { icon: "○", color: "var(--cli-text-dim)", label: "disconnected" },
-        error: { icon: "✗", color: "var(--cli-error)", label: "error" },
-    } as const;
 
     interface RpcMessage {
         id?: string | number;
@@ -51,7 +44,6 @@
     let blocks = $state<CodeBlock[]>([]);
 
     const turnGroups = $derived(groupByTurn(blocks));
-    const statusMeta = $derived(statusConfig[socket.status]);
 
     function baseUrlFromWs(wsUrl: string): string | null {
         try {
@@ -381,24 +373,11 @@
 </script>
 
 <div class="review-page">
-    <header class="review-header">
-        <div class="review-header-inner">
-            <a class="brand" href="/">zane</a>
-            <span class="separator">·</span>
-            {#if socket.status === "connecting"}
-                <ShimmerDot color={statusMeta.color} />
-            {:else}
-                <span class="status-icon" style:color={statusMeta.color} title={statusMeta.label} aria-label={statusMeta.label}>
-                    {statusMeta.icon}
-                </span>
-            {/if}
-            {#if threadId}
-                <span class="separator">·</span>
-                <span class="thread-id">{threadId.slice(0, 8)}</span>
-                <a class="back-link" href={`/thread/${threadId}`}>back to thread</a>
-            {/if}
-        </div>
-    </header>
+    <AppHeader status={socket.status} threadId={threadId}>
+        {#snippet actions()}
+            <a href={`/thread/${threadId}`}>back to thread</a>
+        {/snippet}
+    </AppHeader>
 
     <div class="review-body">
         {#if loading}
@@ -453,59 +432,6 @@
         background: var(--cli-bg);
         color: var(--cli-text);
         overflow: hidden;
-    }
-
-    .review-header {
-        width: 100vw;
-        margin-left: calc(50% - 50vw);
-        background: var(--cli-bg-elevated);
-        border-bottom: 1px solid var(--cli-border);
-        font-family: var(--font-mono);
-        font-size: var(--text-sm);
-    }
-
-
-    .review-header-inner {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-        padding: var(--space-sm) var(--space-md);
-        max-width: var(--app-max-width);
-        margin: 0 auto;
-    }
-
-    .brand {
-        font-weight: 600;
-        color: var(--cli-prefix-agent);
-        text-decoration: none;
-    }
-
-    .separator {
-        color: var(--cli-text-muted);
-    }
-
-    .status-icon {
-        line-height: 1;
-    }
-
-    .thread-id {
-        color: var(--cli-text-dim);
-        font-size: var(--text-xs);
-    }
-
-    .back-link {
-        margin-left: auto;
-        font-size: var(--text-xs);
-        color: var(--cli-text-dim);
-        text-decoration: none;
-        border: 1px solid var(--cli-border);
-        padding: var(--space-xs) var(--space-sm);
-        border-radius: var(--radius-sm);
-    }
-
-    .back-link:hover {
-        color: var(--cli-text);
-        border-color: var(--cli-text-muted);
     }
 
     .review-body {
