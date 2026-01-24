@@ -12,7 +12,7 @@
     onReasoningChange: (effort: ReasoningEffort) => void;
   }
 
-  let {
+  const {
     model,
     reasoningEffort,
     modelOptions = [],

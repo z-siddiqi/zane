@@ -5,12 +5,12 @@ import { threads } from "./threads.svelte";
 const STORE_KEY = "__zane_messages_store__";
 
 type ReasoningMode = "summary" | "raw";
-type ReasoningState = {
+interface ReasoningState {
   buffer: string;
   full: string;
   mode: ReasoningMode | null;
   header: string | null;
-};
+}
 
 class MessagesStore {
   #byThread = $state<Map<string, Message[]>>(new Map());
@@ -31,13 +31,27 @@ class MessagesStore {
   #planExplanation = $state<string | null>(null);
   #statusDetail = $state<string | null>(null);
 
-  get turnId() { return this.#currentTurnId; }
-  get turnStatus() { return this.#currentTurnStatus; }
-  get plan() { return this.#currentPlan; }
-  get planExplanation() { return this.#planExplanation; }
-  get statusDetail() { return this.#statusDetail; }
-  get isReasoningStreaming() { return this.#isReasoningStreaming; }
-  get streamingReasoningText() { return this.#streamingReasoningText; }
+  get turnId() {
+    return this.#currentTurnId;
+  }
+  get turnStatus() {
+    return this.#currentTurnStatus;
+  }
+  get plan() {
+    return this.#currentPlan;
+  }
+  get planExplanation() {
+    return this.#planExplanation;
+  }
+  get statusDetail() {
+    return this.#statusDetail;
+  }
+  get isReasoningStreaming() {
+    return this.#isReasoningStreaming;
+  }
+  get streamingReasoningText() {
+    return this.#streamingReasoningText;
+  }
 
   clearThread(threadId: string) {
     this.#byThread.delete(threadId);
@@ -56,9 +70,7 @@ class MessagesStore {
   }
 
   get pendingApprovals(): ApprovalRequest[] {
-    return Array.from(this.#pendingApprovals.values()).filter(
-      (a) => a.status === "pending"
-    );
+    return Array.from(this.#pendingApprovals.values()).filter((a) => a.status === "pending");
   }
 
   approve(approvalId: string, forSession = false) {
@@ -154,13 +166,7 @@ class MessagesStore {
     this.#byThread = new Map(this.#byThread).set(threadId, updated);
   }
 
-  #appendToMessage(
-    threadId: string,
-    itemId: string,
-    delta: string,
-    role: Message["role"],
-    kind?: Message["kind"],
-  ) {
+  #appendToMessage(threadId: string, itemId: string, delta: string, role: Message["role"], kind?: Message["kind"]) {
     const key = `${threadId}:${itemId}`;
     const current = this.#streamingText.get(key) ?? "";
     this.#streamingText.set(key, current + delta);
@@ -488,7 +494,7 @@ class MessagesStore {
     if (method?.includes("/requestApproval")) {
       const itemId = (params.itemId as string) || `approval-${Date.now()}`;
       const reason = (params.reason as string) || null;
-      const rpcId = msg.id as number;  // Capture the request ID for response
+      const rpcId = msg.id as number; // Capture the request ID for response
 
       // Determine type from method name
       let approvalType: ApprovalRequest["type"] = "other";
@@ -509,7 +515,7 @@ class MessagesStore {
 
       const approval: ApprovalRequest = {
         id: itemId,
-        rpcId,  // Store the RPC ID so we can respond to it
+        rpcId, // Store the RPC ID so we can respond to it
         type: approvalType,
         description,
         status: "pending",

@@ -7,7 +7,7 @@
     defaultOpen?: boolean;
   }
 
-  let { message, defaultOpen = false }: Props = $props();
+  const { message, defaultOpen = false }: Props = $props();
 
   let isOpen = $state(untrack(() => defaultOpen));
 

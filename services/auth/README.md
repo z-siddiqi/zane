@@ -39,34 +39,34 @@ This is a single-user auth system:
 To add a passkey on another device, sign in first, then run this in the browser console:
 
 ```javascript
-const { startRegistration } = await import('@simplewebauthn/browser');
+const { startRegistration } = await import("@simplewebauthn/browser");
 
-const opts = await fetch('/auth/register/options', {
-  method: 'POST',
+const opts = await fetch("/auth/register/options", {
+  method: "POST",
   headers: {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${localStorage.getItem('zane_auth_token')}`
-  }
-}).then(r => r.json());
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${localStorage.getItem("zane_auth_token")}`,
+  },
+}).then((r) => r.json());
 
 const credential = await startRegistration({ optionsJSON: opts });
 
-await fetch('/auth/register/verify', {
-  method: 'POST',
+await fetch("/auth/register/verify", {
+  method: "POST",
   headers: {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${localStorage.getItem('zane_auth_token')}`
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${localStorage.getItem("zane_auth_token")}`,
   },
-  body: JSON.stringify({ credential })
-}).then(r => r.json());
+  body: JSON.stringify({ credential }),
+}).then((r) => r.json());
 ```
 
 ## Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/auth/session` | Get auth status |
-| POST | `/auth/register/options` | Start passkey registration |
-| POST | `/auth/register/verify` | Complete registration |
-| POST | `/auth/login/options` | Start passkey login |
-| POST | `/auth/login/verify` | Complete login |
+| Method | Path                     | Description                |
+| ------ | ------------------------ | -------------------------- |
+| GET    | `/auth/session`          | Get auth status            |
+| POST   | `/auth/register/options` | Start passkey registration |
+| POST   | `/auth/register/verify`  | Complete registration      |
+| POST   | `/auth/login/options`    | Start passkey login        |
+| POST   | `/auth/login/verify`     | Complete login             |

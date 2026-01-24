@@ -42,7 +42,7 @@ function parseTransports(value: string | null): StoredCredential["transports"] {
 
 export async function getUser(env: CloudflareEnv): Promise<StoredUser | null> {
   const row = await env.DB.prepare(
-    "SELECT id, name, display_name FROM passkey_users ORDER BY created_at ASC LIMIT 1",
+    "SELECT id, name, display_name FROM passkey_users ORDER BY created_at ASC LIMIT 1"
   ).first<PasskeyUserRow>();
   if (!row) return null;
   return { id: row.id, name: row.name, displayName: row.display_name };
@@ -67,7 +67,7 @@ export async function ensureUser(env: CloudflareEnv): Promise<StoredUser> {
 
 export async function listCredentials(env: CloudflareEnv, userId: string): Promise<StoredCredential[]> {
   const result = await env.DB.prepare(
-    "SELECT id, user_id, public_key, counter, transports, device_type, backed_up FROM passkey_credentials WHERE user_id = ? ORDER BY created_at ASC",
+    "SELECT id, user_id, public_key, counter, transports, device_type, backed_up FROM passkey_credentials WHERE user_id = ? ORDER BY created_at ASC"
   )
     .bind(userId)
     .all<PasskeyCredentialRow>();
@@ -85,7 +85,7 @@ export async function listCredentials(env: CloudflareEnv, userId: string): Promi
 
 export async function getCredential(env: CloudflareEnv, id: string): Promise<StoredCredential | null> {
   const row = await env.DB.prepare(
-    "SELECT id, user_id, public_key, counter, transports, device_type, backed_up FROM passkey_credentials WHERE id = ?",
+    "SELECT id, user_id, public_key, counter, transports, device_type, backed_up FROM passkey_credentials WHERE id = ?"
   )
     .bind(id)
     .first<PasskeyCredentialRow>();
@@ -104,7 +104,7 @@ export async function getCredential(env: CloudflareEnv, id: string): Promise<Sto
 
 export async function upsertCredential(env: CloudflareEnv, credential: StoredCredential): Promise<void> {
   await env.DB.prepare(
-    "INSERT INTO passkey_credentials (id, user_id, public_key, counter, transports, device_type, backed_up, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET public_key = excluded.public_key, counter = excluded.counter, transports = excluded.transports, device_type = excluded.device_type, backed_up = excluded.backed_up, updated_at = excluded.updated_at",
+    "INSERT INTO passkey_credentials (id, user_id, public_key, counter, transports, device_type, backed_up, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET public_key = excluded.public_key, counter = excluded.counter, transports = excluded.transports, device_type = excluded.device_type, backed_up = excluded.backed_up, updated_at = excluded.updated_at"
   )
     .bind(
       credential.id,
@@ -115,7 +115,7 @@ export async function upsertCredential(env: CloudflareEnv, credential: StoredCre
       credential.deviceType ?? null,
       credential.backedUp ? 1 : 0,
       Date.now(),
-      Date.now(),
+      Date.now()
     )
     .run();
 }
@@ -130,19 +130,17 @@ export async function createSessionRecord(
   env: CloudflareEnv,
   sessionId: string,
   userId: string,
-  expiresAt: number,
+  expiresAt: number
 ): Promise<void> {
   await env.DB.prepare(
-    "INSERT INTO auth_sessions (id, user_id, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, NULL)",
+    "INSERT INTO auth_sessions (id, user_id, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, NULL)"
   )
     .bind(sessionId, userId, Date.now(), expiresAt)
     .run();
 }
 
 export async function getSessionRecord(env: CloudflareEnv, sessionId: string): Promise<AuthSessionRow | null> {
-  return await env.DB.prepare(
-    "SELECT id, user_id, created_at, expires_at, revoked_at FROM auth_sessions WHERE id = ?",
-  )
+  return await env.DB.prepare("SELECT id, user_id, created_at, expires_at, revoked_at FROM auth_sessions WHERE id = ?")
     .bind(sessionId)
     .first<AuthSessionRow>();
 }

@@ -3,7 +3,7 @@
     color?: string;
   }
 
-  let { color = "var(--cli-prefix-agent)" }: Props = $props();
+  const { color = "var(--cli-prefix-agent)" }: Props = $props();
 </script>
 
 <span class="shimmer-dot" style:--dot-color={color}>●</span>

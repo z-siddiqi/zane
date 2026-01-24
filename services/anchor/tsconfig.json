@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "lib": ["ES2022"],
-    "noEmit": true,
+    "noEmit": true
   },
-  "include": ["src"],
+  "include": ["src"]
 }

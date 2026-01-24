@@ -1,4 +1,8 @@
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
+import type {
+  PublicKeyCredentialCreationOptionsJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+} from "@simplewebauthn/types";
 
 const STORE_KEY = "__zane_auth_store__";
 const STORAGE_KEY = "zane_auth_token";
@@ -6,22 +10,30 @@ const AUTH_BASE_URL = (import.meta.env.VITE_AUTH_URL ?? "").replace(/\/$/, "");
 
 type AuthStatus = "loading" | "signed_out" | "signed_in" | "needs_setup";
 
-type AuthUser = {
+interface AuthUser {
   id: string;
   name: string;
-};
+}
 
-type AuthSessionResponse = {
+interface AuthSessionResponse {
   authenticated: boolean;
   user: AuthUser | null;
   hasPasskey: boolean;
-};
+}
 
-type AuthVerifyResponse = {
+interface AuthVerifyResponse {
   verified: boolean;
   token: string;
   user?: AuthUser;
-};
+}
+
+interface LoginOptionsResponse extends PublicKeyCredentialRequestOptionsJSON {
+  error?: string;
+}
+
+interface RegisterOptionsResponse extends PublicKeyCredentialCreationOptionsJSON {
+  error?: string;
+}
 
 function apiUrl(path: string): string {
   return `${AUTH_BASE_URL}${path}`;
@@ -92,10 +104,9 @@ class AuthStore {
       const optionsResponse = await fetch(apiUrl("/auth/login/options"), {
         method: "POST",
       });
-      const options = await parseResponse<Record<string, unknown>>(optionsResponse);
-      if (!optionsResponse.ok || !options) {
-        this.error =
-          (options as { error?: string } | null)?.error ?? "Unable to request sign-in.";
+      const options = await parseResponse<LoginOptionsResponse>(optionsResponse);
+      if (!optionsResponse.ok || !options || options.error) {
+        this.error = options?.error ?? "Unable to request sign-in.";
         return;
       }
 
@@ -130,8 +141,8 @@ class AuthStore {
         method: "POST",
         headers: { "content-type": "application/json", ...this.#authHeaders() },
       });
-      const options = await parseResponse<Record<string, unknown> & { error?: string }>(optionsResponse);
-      if (!optionsResponse.ok || !options) {
+      const options = await parseResponse<RegisterOptionsResponse>(optionsResponse);
+      if (!optionsResponse.ok || !options || options.error) {
         this.error = options?.error ?? "Unable to start registration.";
         return;
       }

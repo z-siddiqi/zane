@@ -8,7 +8,7 @@
     onCancel: () => void;
   }
 
-  let { approval, onApprove, onDecline, onCancel }: Props = $props();
+  const { approval, onApprove, onDecline, onCancel }: Props = $props();
 
   let selectedIndex = $state(0);
 

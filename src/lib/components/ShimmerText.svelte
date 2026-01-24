@@ -4,7 +4,7 @@
     duration?: number;
   }
 
-  let { text, duration = 2 }: Props = $props();
+  const { text, duration = 2 }: Props = $props();
 </script>
 
 <span class="shimmer-text" style:--duration="{duration}s">{text}</span>

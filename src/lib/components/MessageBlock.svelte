@@ -8,7 +8,7 @@
     message: Message;
   }
 
-  let { message }: Props = $props();
+  const { message }: Props = $props();
 
   const isReasoning = $derived(message.role === "assistant" && message.kind === "reasoning");
   const isTool = $derived(

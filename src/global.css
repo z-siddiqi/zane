@@ -4,14 +4,17 @@
   box-sizing: border-box;
 }
 
-html, body {
+html,
+body {
   margin: 0;
   padding: 0;
   height: 100%;
   font-family: var(--font-mono);
   color: var(--cli-text);
   background: var(--cli-bg);
-  transition: background var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
 }
 
 #app {
@@ -28,10 +31,13 @@ html, body {
 }
 
 /* Smooth theme transitions */
-*, *::before, *::after {
-  transition: background-color var(--transition-fast),
-              border-color var(--transition-fast),
-              color var(--transition-fast);
+*,
+*::before,
+*::after {
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 /* Scrollbar styling */

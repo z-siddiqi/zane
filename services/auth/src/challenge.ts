@@ -3,7 +3,7 @@ export const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 export async function setChallenge(
   env: CloudflareEnv,
   type: "registration" | "authentication",
-  value: string,
+  value: string
 ): Promise<boolean> {
   const id = env.PASSKEY_CHALLENGE_DO.idFromName("default");
   const stub = env.PASSKEY_CHALLENGE_DO.get(id);
@@ -16,7 +16,7 @@ export async function setChallenge(
 
 export async function consumeChallenge(
   env: CloudflareEnv,
-  type: "registration" | "authentication",
+  type: "registration" | "authentication"
 ): Promise<string | null> {
   const id = env.PASSKEY_CHALLENGE_DO.idFromName("default");
   const stub = env.PASSKEY_CHALLENGE_DO.get(id);

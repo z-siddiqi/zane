@@ -149,13 +149,9 @@ async function signJwtHs256(payload: Record<string, unknown>, secret: string): P
   const headerPart = base64UrlEncode(encoder.encode(JSON.stringify(header)));
   const payloadPart = base64UrlEncode(encoder.encode(JSON.stringify(payload)));
   const data = encoder.encode(`${headerPart}.${payloadPart}`);
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ]);
   const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, data));
   const signaturePart = base64UrlEncode(signature);
   return `${headerPart}.${payloadPart}.${signaturePart}`;
@@ -175,7 +171,7 @@ async function buildOrbitUrl(): Promise<string | null> {
           iat: now,
           exp: now + ANCHOR_JWT_TTL_SEC,
         },
-        ZANE_ANCHOR_JWT_SECRET,
+        ZANE_ANCHOR_JWT_SECRET
       );
       url.searchParams.set("token", token);
     }
@@ -207,7 +203,7 @@ async function connectOrbit(): Promise<void> {
       JSON.stringify({
         type: "anchor.hello",
         ts: new Date().toISOString(),
-      }),
+      })
     );
     console.log("[anchor] connected to orbit");
   });
@@ -244,7 +240,7 @@ async function connectOrbit(): Promise<void> {
 
 async function streamLines(
   stream: ReadableStream<Uint8Array> | number | null | undefined,
-  onLine: (line: string) => void,
+  onLine: (line: string) => void
 ): Promise<void> {
   if (!stream || typeof stream === "number") return;
   const reader = stream.getReader();

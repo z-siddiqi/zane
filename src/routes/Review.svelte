@@ -14,21 +14,21 @@
         error: { icon: "✗", color: "var(--cli-error)", label: "error" },
     } as const;
 
-    type RpcMessage = {
+    interface RpcMessage {
         id?: string | number;
         method?: string;
         params?: Record<string, unknown>;
         result?: unknown;
         error?: unknown;
-    };
+    }
 
-    type EventEntry = {
+    interface EventEntry {
         ts: string;
         direction: "client" | "server";
         message: RpcMessage;
-    };
+    }
 
-    type CodeBlock = {
+    interface CodeBlock {
         id: string;
         kind: "command" | "file";
         title: string;
@@ -38,12 +38,12 @@
         ts: string;
         turnKey: string;
         cause?: string | null;
-    };
+    }
 
-    type TurnGroup = {
+    interface TurnGroup {
         id: string;
         blocks: CodeBlock[];
-    };
+    }
 
     const threadId = $derived(route.params.id);
     let loading = $state(false);

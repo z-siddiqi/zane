@@ -122,7 +122,7 @@ class ThreadsStore {
       if (params?.thread) {
         this.list = [params.thread, ...this.list];
         this.currentId = params.thread.id;
-        navigate(`/thread/${params.thread.id}`);
+        navigate("/thread/:id", { params: { id: params.thread.id } });
         if (this.#pendingStartInput) {
           socket.send({
             method: "turn/start",

@@ -7,7 +7,7 @@
     diff: string;
   }
 
-  let { diff }: Props = $props();
+  const { diff }: Props = $props();
   let container: HTMLDivElement | null = $state(null);
   let instances: FileDiff[] = [];
 

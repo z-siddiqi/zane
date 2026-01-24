@@ -46,7 +46,7 @@ function parseJwtPart<T>(part: string): T | null {
 async function verifyJwtHs256(
   token: string,
   secret: string,
-  expected: { issuer: string; audience: string },
+  expected: { issuer: string; audience: string }
 ): Promise<boolean> {
   const [headerPart, payloadPart, signaturePart] = token.split(".");
   if (!headerPart || !payloadPart || !signaturePart) return false;
@@ -75,7 +75,7 @@ async function verifyJwtHs256(
     new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["verify"],
+    ["verify"]
   );
   const data = new TextEncoder().encode(`${headerPart}.${payloadPart}`);
   const signature = base64UrlToBytes(signaturePart);
@@ -316,7 +316,7 @@ export class OrbitRelay {
         type: "orbit.hello",
         role,
         ts: new Date().toISOString(),
-      }),
+      })
     );
 
     socket.addEventListener("message", (event) => {
@@ -373,7 +373,7 @@ export class OrbitRelay {
 
     try {
       await this.env.DB.prepare(
-        "INSERT INTO events (thread_id, turn_id, direction, role, method, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO events (thread_id, turn_id, direction, role, method, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
       )
         .bind(
           threadId,
@@ -382,7 +382,7 @@ export class OrbitRelay {
           direction === "client" ? "client" : "anchor",
           method,
           JSON.stringify(entry),
-          Math.floor(Date.now() / 1000),
+          Math.floor(Date.now() / 1000)
         )
         .run();
     } catch (err) {

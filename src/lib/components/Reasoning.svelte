@@ -11,7 +11,7 @@
     defaultOpen?: boolean;
   }
 
-  let {
+  const {
     content,
     isStreaming = false,
     defaultOpen = true

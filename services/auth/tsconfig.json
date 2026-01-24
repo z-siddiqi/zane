@@ -4,7 +4,7 @@
     "lib": ["ES2022"],
     "types": ["./worker-configuration.d.ts"],
     "typeRoots": ["./", "../../node_modules/@types"],
-    "noEmit": true,
+    "noEmit": true
   },
-  "include": ["src"],
+  "include": ["src"]
 }

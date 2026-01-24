@@ -8,7 +8,7 @@
     startTime?: number;
   }
 
-  let { detail = null, plan = [], startTime }: Props = $props();
+  const { detail = null, plan = [], startTime }: Props = $props();
 
   let elapsed = $state(0);
 

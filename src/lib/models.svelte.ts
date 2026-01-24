@@ -59,9 +59,7 @@ class ModelsStore {
     // Handle different response shapes
     const items = this.#extractArray(result);
 
-    return items
-      .map((item) => this.#parseModelItem(item))
-      .filter((m): m is ModelOption => m !== null);
+    return items.map((item) => this.#parseModelItem(item)).filter((m): m is ModelOption => m !== null);
   }
 
   #extractArray(result: unknown): unknown[] {
@@ -69,12 +67,7 @@ class ModelsStore {
     if (!result || typeof result !== "object") return [];
 
     const obj = result as Record<string, unknown>;
-    return (
-      (obj.models as unknown[]) ??
-      (obj.data as unknown[]) ??
-      (obj.items as unknown[]) ??
-      []
-    );
+    return (obj.models as unknown[]) ?? (obj.data as unknown[]) ?? (obj.items as unknown[]) ?? [];
   }
 
   #parseModelItem(item: unknown): ModelOption | null {

@@ -11,7 +11,7 @@ import {
   verifyRegistrationResponse,
 } from "@simplewebauthn/server";
 
-import type { ChallengeRecord, SessionPayload } from "./types";
+import type { ChallengeRecord } from "./types";
 import { base64UrlDecode, base64UrlEncode, corsHeaders, getRpId, isAllowedOrigin } from "./utils";
 import { createSession, verifySession } from "./session";
 import {
@@ -90,7 +90,7 @@ async function handleSession(req: Request, env: CloudflareEnv): Promise<Response
       user: session ? { id: session.sub, name: session.name } : null,
       hasPasskey: credentials.length > 0,
     },
-    { status: 200, headers: corsHeaders(req, env) },
+    { status: 200, headers: corsHeaders(req, env) }
   );
 }
 
@@ -180,7 +180,7 @@ async function handleRegisterVerify(req: Request, env: CloudflareEnv): Promise<R
   } catch {
     return Response.json(
       { error: "Registration verification failed." },
-      { status: 400, headers: corsHeaders(req, env) },
+      { status: 400, headers: corsHeaders(req, env) }
     );
   }
 
@@ -211,7 +211,7 @@ async function handleRegisterVerify(req: Request, env: CloudflareEnv): Promise<R
       token,
       user: { id: user.id, name: user.name },
     },
-    { status: 200, headers: corsHeaders(req, env) },
+    { status: 200, headers: corsHeaders(req, env) }
   );
 }
 
@@ -273,7 +273,7 @@ async function handleLoginVerify(req: Request, env: CloudflareEnv): Promise<Resp
   if (!expectedChallenge) {
     return Response.json(
       { error: "Authentication challenge expired." },
-      { status: 400, headers: corsHeaders(req, env) },
+      { status: 400, headers: corsHeaders(req, env) }
     );
   }
 
@@ -302,7 +302,7 @@ async function handleLoginVerify(req: Request, env: CloudflareEnv): Promise<Resp
   } catch {
     return Response.json(
       { error: "Authentication verification failed." },
-      { status: 400, headers: corsHeaders(req, env) },
+      { status: 400, headers: corsHeaders(req, env) }
     );
   }
 
@@ -319,7 +319,7 @@ async function handleLoginVerify(req: Request, env: CloudflareEnv): Promise<Resp
       token,
       user: { id: user.id, name: user.name },
     },
-    { status: 200, headers: corsHeaders(req, env) },
+    { status: 200, headers: corsHeaders(req, env) }
   );
 }
 

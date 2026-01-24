@@ -3,7 +3,7 @@
     import { auth } from "../auth.svelte";
     import "../styles/tokens.css";
 
-    let { children }: { children: Snippet } = $props();
+    const { children }: { children: Snippet } = $props();
 </script>
 
 {#if auth.status === "loading"}
