@@ -3,9 +3,12 @@
     import { config } from "../lib/config.svelte";
     import { auth } from "../lib/auth.svelte";
     import { socket } from "../lib/socket.svelte";
+    import { theme } from "../lib/theme.svelte";
     import AppHeader from "../lib/components/AppHeader.svelte";
     import "../lib/styles/tokens.css";
     import PierreDiff from "../lib/components/PierreDiff.svelte";
+
+    const themeIcons = { system: "◐", light: "○", dark: "●" } as const;
 
     interface RpcMessage {
         id?: string | number;
@@ -21,29 +24,20 @@
         message: RpcMessage;
     }
 
-    interface CodeBlock {
+    interface FileBlock {
         id: string;
-        kind: "command" | "file";
         title: string;
         body: string;
         files?: string[];
-        exitCode?: number | null;
         ts: string;
         turnKey: string;
         cause?: string | null;
     }
 
-    interface TurnGroup {
-        id: string;
-        blocks: CodeBlock[];
-    }
-
     const threadId = $derived(route.params.id);
     let loading = $state(false);
     let error = $state<string | null>(null);
-    let blocks = $state<CodeBlock[]>([]);
-
-    const turnGroups = $derived(groupByTurn(blocks));
+    let blocks = $state<FileBlock[]>([]);
 
     function baseUrlFromWs(wsUrl: string): string | null {
         try {
@@ -74,10 +68,6 @@
         return events;
     }
 
-    function isDiffText(text: string): boolean {
-        return text.includes("diff --git") || text.includes("@@") || text.startsWith("--- ");
-    }
-
     function filesFromPatch(patch: string): string[] {
         const files = new Set<string>();
         const lines = patch.split(/\r?\n/);
@@ -105,16 +95,6 @@
         return Array.from(files);
     }
 
-    function toPatch(path: string, diff: string): string {
-        const trimmed = diff.trim();
-        if (!trimmed) return "";
-        if (trimmed.includes("diff --git")) return diff;
-        const normalized = path.replace(/^\/+/, "");
-        return [`diff --git a/${normalized} b/${normalized}`, `--- a/${normalized}`, `+++ b/${normalized}`, diff].join(
-            "\n",
-        );
-    }
-
     function diffStats(text: string): { added: number; removed: number } {
         let added = 0;
         let removed = 0;
@@ -139,10 +119,8 @@
         return text?.trim() ? text : null;
     }
 
-    function buildBlocks(events: EventEntry[]): CodeBlock[] {
-        const nextBlocks: CodeBlock[] = [];
-        const fileOutputByItem = new Map<string, string>();
-        const commandOutputByItem = new Map<string, string>();
+    function buildBlocks(events: EventEntry[]): FileBlock[] {
+        const blocks: FileBlock[] = [];
         const turnCauseByKey = new Map<string, string>();
         const turnDiffByKey = new Map<string, { diff: string; ts: string }>();
         const turnKeyByServerId = new Map<string, string>();
@@ -151,6 +129,7 @@
 
         for (const entry of events) {
             const message = entry.message;
+
             if (message?.method === "turn/start") {
                 const params = message.params as Record<string, unknown> | undefined;
                 const text = extractTurnInputText(params);
@@ -182,26 +161,6 @@
 
             if (entry.direction !== "server") continue;
 
-            if (message?.method === "item/fileChange/outputDelta") {
-                const params = message.params as Record<string, unknown> | undefined;
-                const itemId = (params?.itemId as string | undefined) ?? (params?.item_id as string | undefined);
-                const delta = (params?.delta as string | undefined) ?? "";
-                if (itemId && delta) {
-                    fileOutputByItem.set(itemId, (fileOutputByItem.get(itemId) ?? "") + delta);
-                }
-                continue;
-            }
-
-            if (message?.method === "item/commandExecution/outputDelta") {
-                const params = message.params as Record<string, unknown> | undefined;
-                const itemId = (params?.itemId as string | undefined) ?? (params?.item_id as string | undefined);
-                const delta = (params?.delta as string | undefined) ?? "";
-                if (itemId && delta) {
-                    commandOutputByItem.set(itemId, (commandOutputByItem.get(itemId) ?? "") + delta);
-                }
-                continue;
-            }
-
             if (message?.method === "turn/diff/updated") {
                 const params = message.params as Record<string, unknown> | undefined;
                 const diff = (params?.diff as string | undefined) ?? "";
@@ -232,105 +191,24 @@
                         turnCauseByKey.set(turnKey, text);
                     }
                 }
-                continue;
             }
+        }
 
-            if (message?.method !== "item/completed") continue;
-
-            const params = message.params as Record<string, unknown> | undefined;
-            if (!params) continue;
-            const item = params.item as Record<string, unknown> | undefined;
-            if (!item) continue;
-
-            const itemType = item.type as string | undefined;
-            if (itemType !== "commandExecution" && itemType !== "fileChange") continue;
-
-            const serverTurnId = (params.turnId as string | undefined) ?? (params.turn_id as string | undefined);
-            const turnKey = serverTurnId ? (turnKeyByServerId.get(serverTurnId) ?? activeTurnKey) : activeTurnKey;
+        for (const [turnKey, payload] of turnDiffByKey.entries()) {
             const cause = turnCauseByKey.get(turnKey) ?? null;
-
-            if (itemType === "commandExecution") {
-                const itemId = (item.id as string) || `command-${entry.ts}`;
-                const command = (item.command as string) || "";
-                const output = (item.aggregatedOutput as string) || commandOutputByItem.get(itemId) || "";
-                const exitCode = typeof item.exitCode === "number" ? item.exitCode : null;
-                const title = command ? `$ ${command}` : "Command execution";
-                nextBlocks.push({
-                    id: itemId,
-                    kind: "command",
-                    title,
-                    body: output,
-                    exitCode,
-                    ts: entry.ts,
-                    turnKey,
-                    cause,
-                });
-            }
-
-            if (itemType === "fileChange") {
-                const itemId = (item.id as string) || `file-${entry.ts}`;
-                const changes = (item.changes as Array<{ path?: string; diff?: string }>) || [];
-                const files = changes.map((change) => change.path || "unknown");
-                let body = changes
-                    .map((change) => {
-                        const path = change.path || "unknown";
-                        const diff = change.diff || "";
-                        return toPatch(path, diff);
-                    })
-                    .filter(Boolean)
-                    .join("\n\n");
-                if (!body.trim()) {
-                    body = fileOutputByItem.get(itemId) || "";
-                }
-                const title = files.length ? files.join(", ") : "File change";
-                nextBlocks.push({
-                    id: itemId,
-                    kind: "file",
-                    title,
-                    body,
-                    files,
-                    ts: entry.ts,
-                    turnKey,
-                    cause,
-                });
-            }
+            const files = filesFromPatch(payload.diff);
+            blocks.push({
+                id: `turn-${turnKey}`,
+                title: files.length > 0 ? `${files.length} files` : "Changes",
+                body: payload.diff,
+                files: files.length > 0 ? files : undefined,
+                ts: payload.ts,
+                turnKey,
+                cause,
+            });
         }
 
-        if (turnDiffByKey.size > 0) {
-            for (const [turnKey, payload] of turnDiffByKey.entries()) {
-                const cause = turnCauseByKey.get(turnKey) ?? null;
-                const files = filesFromPatch(payload.diff);
-                nextBlocks.push({
-                    id: `turn-diff-${turnKey}`,
-                    kind: "file",
-                    title: "Turn diff",
-                    body: payload.diff,
-                    files: files.length > 0 ? files : undefined,
-                    ts: payload.ts,
-                    turnKey,
-                    cause,
-                });
-            }
-        }
-
-        return nextBlocks;
-    }
-
-    function groupByTurn(items: CodeBlock[]): TurnGroup[] {
-        const groups: TurnGroup[] = [];
-        const index = new Map<string, TurnGroup>();
-
-        for (const block of items) {
-            let group = index.get(block.turnKey);
-            if (!group) {
-                group = { id: block.turnKey, blocks: [] };
-                index.set(block.turnKey, group);
-                groups.push(group);
-            }
-            group.blocks.push(block);
-        }
-
-        return groups;
+        return blocks;
     }
 
     async function loadEvents() {
@@ -375,7 +253,11 @@
 <div class="review-page">
     <AppHeader status={socket.status} threadId={threadId}>
         {#snippet actions()}
-            <a href={`/thread/${threadId}`}>back to thread</a>
+            <a href={`/thread/${threadId}`}>back</a>
+            <button type="button" onclick={() => theme.cycle()} title="Theme: {theme.current}">
+                {themeIcons[theme.current]}
+            </button>
+            <button type="button" onclick={() => auth.signOut()} title="Sign out">⏻</button>
         {/snippet}
     </AppHeader>
 
@@ -387,38 +269,23 @@
         {:else if blocks.length === 0}
             <div class="state">No code changes found for this thread yet.</div>
         {:else}
-            {#each turnGroups as turn}
-                <section class="turn">
-                    <div class="turn-header">Turn {turn.id}</div>
-                    <div class="turn-blocks">
-                        {#each turn.blocks as block}
-                            <div class="block">
-                                <div class="block-header">
-                                    <span class="block-kind">{block.kind === "file" ? "File change" : "Command"}</span>
-                                    <span class="block-title">{block.title}</span>
-                                    {#if isDiffText(block.body)}
-                                        <span class="diff-stats"
-                                            >+{diffStats(block.body).added} −{diffStats(block.body).removed}</span
-                                        >
-                                    {/if}
-                                    {#if block.kind === "command" && block.exitCode !== null && block.exitCode !== undefined}
-                                        <span class="exit-code">exit {block.exitCode}</span>
-                                    {/if}
-                                </div>
-                                {#if block.cause}
-                                    <div class="block-cause">caused by: {truncate(block.cause)}</div>
-                                {/if}
-                                {#if block.body}
-                                    {#if block.kind === "file"}
-                                        <PierreDiff diff={block.body} />
-                                    {:else}
-                                        <pre class="block-body">{block.body}</pre>
-                                    {/if}
-                                {/if}
-                            </div>
-                        {/each}
+            {#each blocks as block (block.id)}
+                {@const stats = diffStats(block.body)}
+                <details class="turn">
+                    <summary class="turn-header split">
+                        <span class="turn-label">{block.cause ? truncate(block.cause, 80) : `Turn ${block.turnKey}`}</span>
+                        <span class="turn-meta row">
+                            <span class="turn-stats">
+                                <span class="diff-added">+{stats.added}</span>
+                                <span class="diff-removed">-{stats.removed}</span>
+                            </span>
+                            <span class="turn-toggle"></span>
+                        </span>
+                    </summary>
+                    <div class="turn-content">
+                        <PierreDiff diff={block.body} />
                     </div>
-                </section>
+                </details>
             {/each}
         {/if}
     </div>
@@ -453,77 +320,81 @@
     }
 
     .turn {
-        margin-bottom: var(--space-xl);
-    }
-
-    .turn-header {
-        font-size: var(--text-xs);
-        color: var(--cli-text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        margin-bottom: var(--space-sm);
-    }
-
-    .turn-blocks {
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-md);
-    }
-
-    .block {
+        margin-bottom: var(--space-lg);
         border: 1px solid var(--cli-border);
-        border-radius: var(--radius-sm);
+        border-radius: var(--radius-md);
         background: var(--cli-bg-elevated);
     }
 
-    .block-header {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
+    .turn-header {
+        list-style: none;
+        cursor: pointer;
         padding: var(--space-sm) var(--space-md);
+        font-size: var(--text-xs);
+        color: var(--cli-text-dim);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        transition: all var(--transition-fast);
+    }
+
+    .turn-header::-webkit-details-marker {
+        display: none;
+    }
+
+    .turn-header:hover {
+        background: var(--cli-bg-hover);
+        color: var(--cli-text);
+    }
+
+    .turn[open] .turn-header {
         border-bottom: 1px solid var(--cli-border);
     }
 
-    .block-kind {
-        font-size: var(--text-xs);
-        text-transform: uppercase;
-        color: var(--cli-text-muted);
-        letter-spacing: 0.08em;
-    }
-
-    .block-title {
-        color: var(--cli-text);
-        flex: 1;
+    .turn-label {
+        font-weight: 500;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        min-width: 0;
+        text-transform: none;
+        letter-spacing: 0;
     }
 
-    .exit-code {
+    .turn-meta {
+        --row-gap: var(--space-sm);
+        flex-shrink: 0;
+    }
+
+    .turn-stats {
         font-size: var(--text-xs);
+        text-transform: none;
+        letter-spacing: 0;
+    }
+
+    .turn-toggle {
+        width: 1rem;
+        text-align: center;
         color: var(--cli-text-muted);
     }
 
-    .diff-stats {
-        font-size: var(--text-xs);
-        color: var(--cli-text-dim);
+    .turn-toggle::before {
+        content: "+";
     }
 
-    .block-cause {
-        padding: var(--space-xs) var(--space-md);
-        font-size: var(--text-xs);
-        color: var(--cli-text-muted);
-        border-bottom: 1px solid var(--cli-border);
+    .turn[open] .turn-toggle::before {
+        content: "−";
+    }
+
+    .turn-content {
         background: var(--cli-bg);
     }
 
-    .block-body {
-        margin: 0;
-        padding: var(--space-md);
-        white-space: pre-wrap;
-        word-break: break-word;
-        color: var(--cli-text);
-        background: var(--cli-bg);
+    .diff-added {
+        color: var(--cli-success);
+    }
+
+    .diff-removed {
+        color: var(--cli-error);
     }
 
     @media (max-width: 900px) {
