@@ -12,6 +12,8 @@ interface ReasoningState {
   header: string | null;
 }
 
+type TurnCompleteCallback = (threadId: string, finalText: string) => void;
+
 class MessagesStore {
   #byThread = $state<Map<string, Message[]>>(new Map());
   #streamingText = $state<Map<string, string>>(new Map());
@@ -19,6 +21,8 @@ class MessagesStore {
   #pendingApprovals = $state<Map<string, ApprovalRequest>>(new Map());
   #reasoningByThread = new Map<string, ReasoningState>();
   #execCommands = new Map<string, string>();
+  #turnCompleteCallbacks = new Map<string, TurnCompleteCallback>();
+  #pendingAgentMessageIds = new Map<string, string>();
 
   // Streaming reasoning state (reactive)
   #streamingReasoningText = $state<string>("");
@@ -31,9 +35,6 @@ class MessagesStore {
   #planExplanation = $state<string | null>(null);
   #statusDetail = $state<string | null>(null);
 
-  get turnId() {
-    return this.#currentTurnId;
-  }
   get turnStatus() {
     return this.#currentTurnStatus;
   }
@@ -53,6 +54,13 @@ class MessagesStore {
     return this.#streamingReasoningText;
   }
 
+  onTurnComplete(threadId: string, callback: TurnCompleteCallback): () => void {
+    this.#turnCompleteCallbacks.set(threadId, callback);
+    return () => {
+      this.#turnCompleteCallbacks.delete(threadId);
+    };
+  }
+
   clearThread(threadId: string) {
     this.#byThread.delete(threadId);
     this.#loadedThreads.delete(threadId);
@@ -69,8 +77,18 @@ class MessagesStore {
     return this.#byThread.get(threadId) ?? [];
   }
 
-  get pendingApprovals(): ApprovalRequest[] {
-    return Array.from(this.#pendingApprovals.values()).filter((a) => a.status === "pending");
+  getThreadMessages(threadId: string | null): Message[] {
+    if (!threadId) return [];
+    return this.#byThread.get(threadId) ?? [];
+  }
+
+  getLatestAssistantMessage(threadId: string | null): Message | null {
+    const messages = this.getThreadMessages(threadId);
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msg = messages[i];
+      if (msg.role === "assistant") return msg;
+    }
+    return null;
   }
 
   approve(approvalId: string, forSession = false) {
@@ -334,7 +352,23 @@ class MessagesStore {
     if (!params) return;
 
     const threadId = this.#extractThreadId(params);
-    if (!threadId) return;
+    if (!threadId) {
+      // Handle task_complete events that use conversationId instead of threadId.
+      if (method === "codex/event/task_complete") {
+        const conversationId = params.conversationId as string | undefined;
+        const msgPayload = params.msg as { last_agent_message?: string } | undefined;
+        const lastMessage = msgPayload?.last_agent_message?.trim();
+        if (conversationId && lastMessage) {
+          this.#upsert(conversationId, {
+            id: `task-complete-${conversationId}`,
+            role: "assistant",
+            text: lastMessage,
+            threadId: conversationId,
+          });
+        }
+      }
+      return;
+    }
 
     // Item started - handle user messages
     if (method === "item/started") {
@@ -366,7 +400,11 @@ class MessagesStore {
     // Agent message delta (streaming)
     if (method === "item/agentMessage/delta") {
       const delta = (params.delta as string) || "";
-      const itemId = (params.itemId as string) || (params.item_id as string) || `agent-${threadId}`;
+      const providedId = (params.itemId as string) || (params.item_id as string);
+      const itemId = providedId || `agent-${threadId}`;
+      if (!providedId) {
+        this.#pendingAgentMessageIds.set(threadId, itemId);
+      }
       this.#updateStreaming(threadId, itemId, delta);
       return;
     }
@@ -469,6 +507,14 @@ class MessagesStore {
       if (turn) {
         this.#currentTurnStatus = (turn.status as TurnStatus) || "Completed";
         this.#statusDetail = null;
+
+        // Fire turn complete callback if registered
+        const callback = this.#turnCompleteCallbacks.get(threadId);
+        if (callback) {
+          const latestMessage = this.getLatestAssistantMessage(threadId);
+          callback(threadId, latestMessage?.text ?? "");
+          this.#turnCompleteCallbacks.delete(threadId);
+        }
       }
       return;
     }
@@ -547,6 +593,12 @@ class MessagesStore {
         case "agentMessage": {
           const text = (item.text as string) || "";
           if (!text) return;
+          const pendingId = this.#pendingAgentMessageIds.get(threadId);
+          if (pendingId && pendingId !== itemId) {
+            this.#remove(threadId, pendingId);
+            this.#clearStreaming(threadId, pendingId);
+          }
+          this.#pendingAgentMessageIds.delete(threadId);
           this.#upsert(threadId, { id: itemId, role: "assistant", text, threadId });
           this.#clearStreaming(threadId, itemId);
           return;

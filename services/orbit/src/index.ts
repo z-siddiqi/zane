@@ -132,7 +132,7 @@ function corsHeaders(origin: string | null): HeadersInit {
   const allowedOrigin = origin ?? "*";
   return {
     "access-control-allow-origin": allowedOrigin,
-    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "access-control-allow-headers": "authorization, content-type",
     "access-control-max-age": "600",
     vary: "origin",
@@ -236,8 +236,11 @@ export default {
       return new Response(null, { status: 200 });
     }
 
-    if (req.method === "OPTIONS" && url.pathname.startsWith("/threads/") && url.pathname.endsWith("/events")) {
-      return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    // CORS preflight for REST APIs
+    if (req.method === "OPTIONS") {
+      if (url.pathname.startsWith("/threads/") && url.pathname.endsWith("/events")) {
+        return new Response(null, { status: 204, headers: corsHeaders(origin) });
+      }
     }
 
     if (req.method === "GET" && url.pathname.startsWith("/threads/") && url.pathname.endsWith("/events")) {
