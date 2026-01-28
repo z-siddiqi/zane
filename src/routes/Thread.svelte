@@ -24,6 +24,7 @@
 
     const threadId = $derived(route.params.id);
 
+
     $effect(() => {
         if (threadId && socket.status === "connected" && threads.currentId !== threadId) {
             threads.open(threadId);
@@ -95,6 +96,7 @@
             sendError = null;
         }
     });
+
 </script>
 
 <div class="thread-page stack">
@@ -134,11 +136,13 @@
             {/each}
 
             {#if messages.isReasoningStreaming}
-                <Reasoning
-                    content={messages.streamingReasoningText}
-                    isStreaming={true}
-                    defaultOpen={true}
-                />
+                <div class="streaming-reasoning">
+                    <Reasoning
+                        content={messages.streamingReasoningText}
+                        isStreaming={true}
+                        defaultOpen={true}
+                    />
+                </div>
             {/if}
 
             {#if messages.turnStatus === "InProgress" && !messages.isReasoningStreaming}
@@ -190,6 +194,10 @@
         overflow-y: auto;
         overflow-x: hidden;
         padding: var(--space-sm) 0;
+    }
+
+    .streaming-reasoning {
+        padding: var(--space-xs) var(--space-md);
     }
 
     .empty {
@@ -257,4 +265,5 @@
         background: var(--cli-error);
         color: white;
     }
+
 </style>

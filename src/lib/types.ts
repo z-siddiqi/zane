@@ -12,6 +12,8 @@ export interface ThreadInfo {
   modelProvider?: string;
 }
 
+export type ApprovalPolicy = "on-request" | "never";
+
 export interface ModelOption {
   value: string;
   label: string;
@@ -45,16 +47,6 @@ export interface MessageMetadata {
   linesAdded?: number;
   linesRemoved?: number;
 }
-
-// Approval decision types per Codex protocol (lowercase!)
-export type CommandApprovalDecision =
-  | "accept"
-  | "acceptForSession"
-  | "acceptWithExecpolicyAmendment"
-  | "decline"
-  | "cancel";
-
-export type FileApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
 
 export interface ApprovalRequest {
   id: string;
@@ -91,12 +83,6 @@ export interface RpcMessage {
 // Turn status
 export type TurnStatus = "InProgress" | "Completed" | "Interrupted" | "Failed";
 
-export interface Turn {
-  id: string;
-  threadId: string;
-  status: TurnStatus;
-}
-
 // Plan step
 export type PlanStepStatus = "Pending" | "InProgress" | "Completed";
 
@@ -105,8 +91,29 @@ export interface PlanStep {
   status: PlanStepStatus;
 }
 
-export interface TurnPlan {
-  turnId: string;
-  explanation?: string;
-  steps: PlanStep[];
+// Planning questions
+export type PlanningQuestionType = "choice" | "multi" | "text" | "scale" | "confirm";
+
+export interface PlanningQuestionOption {
+  id: string;
+  label: string;
+  description?: string;
 }
+
+export interface PlanningQuestion {
+  id: string;
+  type: PlanningQuestionType;
+  question: string;
+  options?: PlanningQuestionOption[];
+  min?: number;
+  max?: number;
+  labels?: [string, string];
+  placeholder?: string;
+}
+
+export interface PlanningAnswer {
+  questionId: string;
+  value: string | string[] | number | boolean;
+}
+
+export type PlanningPhase = "design" | "review" | "final";

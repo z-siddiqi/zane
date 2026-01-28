@@ -1,4 +1,4 @@
-import type { ReasoningEffort, SandboxMode, ThreadInfo, RpcMessage, ThreadSettings } from "./types";
+import type { ApprovalPolicy, ReasoningEffort, SandboxMode, ThreadInfo, RpcMessage, ThreadSettings } from "./types";
 import { socket } from "./socket.svelte";
 import { messages } from "./messages.svelte";
 import { navigate } from "../router";
@@ -20,17 +20,11 @@ class ThreadsStore {
   #settings = $state<Map<string, ThreadSettings>>(new Map());
   #pendingRequests = new Map<number, string>();
   #pendingStartInput: string | null = null;
+  #pendingStartCallback: ((threadId: string) => void) | null = null;
+  #suppressNextNavigation = false;
 
   constructor() {
     this.#loadSettings();
-  }
-
-  get current(): ThreadInfo | undefined {
-    return this.list.find((t) => t.id === this.currentId);
-  }
-
-  get defaultSettings(): ThreadSettings {
-    return { ...DEFAULT_SETTINGS };
   }
 
   getSettings(threadId: string | null): ThreadSettings {
@@ -64,10 +58,6 @@ class ThreadsStore {
     });
   }
 
-  select(threadId: string | null) {
-    this.currentId = threadId;
-  }
-
   open(threadId: string) {
     const id = Date.now();
     this.loading = true;
@@ -81,19 +71,17 @@ class ThreadsStore {
     });
   }
 
-  start(cwd: string, input?: string, options?: { approvalPolicy?: string; sandbox?: string }) {
-    const id = Date.now();
-    this.#pendingRequests.set(id, "start");
-    this.#pendingStartInput = input?.trim() ? input.trim() : null;
-    socket.send({
-      method: "thread/start",
-      id,
-      params: {
-        cwd,
-        ...(options?.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
-        ...(options?.sandbox ? { sandbox: options.sandbox } : {}),
-      },
-    });
+  start(
+    cwd: string,
+    input?: string,
+    options?: {
+      approvalPolicy?: ApprovalPolicy | string;
+      sandbox?: SandboxMode | string;
+      suppressNavigation?: boolean;
+      onThreadStarted?: (threadId: string) => void;
+    }
+  ) {
+    this.#startThread(cwd, input, options);
   }
 
   archive(threadId: string) {
@@ -122,7 +110,13 @@ class ThreadsStore {
       if (params?.thread) {
         this.list = [params.thread, ...this.list];
         this.currentId = params.thread.id;
-        navigate("/thread/:id", { params: { id: params.thread.id } });
+        if (this.#pendingStartCallback) {
+          this.#pendingStartCallback(params.thread.id);
+          this.#pendingStartCallback = null;
+        }
+        if (!this.#suppressNextNavigation) {
+          navigate("/thread/:id", { params: { id: params.thread.id } });
+        }
         if (this.#pendingStartInput) {
           socket.send({
             method: "turn/start",
@@ -134,6 +128,7 @@ class ThreadsStore {
           });
           this.#pendingStartInput = null;
         }
+        this.#suppressNextNavigation = false;
       }
       return;
     }
@@ -193,6 +188,32 @@ class ThreadsStore {
       return this.#normalizeSandbox(type);
     }
     return null;
+  }
+
+  #startThread(
+    cwd: string,
+    input: string | undefined,
+    options?: {
+      approvalPolicy?: ApprovalPolicy | string;
+      sandbox?: SandboxMode | string;
+      suppressNavigation?: boolean;
+      onThreadStarted?: (threadId: string) => void;
+    }
+  ) {
+    const id = Date.now();
+    this.#pendingRequests.set(id, "start");
+    this.#pendingStartInput = input?.trim() ? input.trim() : null;
+    this.#pendingStartCallback = options?.onThreadStarted ?? null;
+    this.#suppressNextNavigation = options?.suppressNavigation ?? false;
+    socket.send({
+      method: "thread/start",
+      id,
+      params: {
+        cwd,
+        ...(options?.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
+        ...(options?.sandbox ? { sandbox: options.sandbox } : {}),
+      },
+    });
   }
 
   #loadSettings() {
