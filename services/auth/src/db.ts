@@ -25,7 +25,7 @@ interface AuthSessionRow {
   revoked_at: number | null;
 }
 
-function randomUserId(): string {
+export function randomUserId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return base64UrlEncode(bytes);
 }
@@ -40,22 +40,31 @@ function parseTransports(value: string | null): StoredCredential["transports"] {
   }
 }
 
-export async function getUser(env: CloudflareEnv): Promise<StoredUser | null> {
+export async function getUserById(env: CloudflareEnv, userId: string): Promise<StoredUser | null> {
   const row = await env.DB.prepare(
-    "SELECT id, name, display_name FROM passkey_users ORDER BY created_at ASC LIMIT 1"
-  ).first<PasskeyUserRow>();
+    "SELECT id, name, display_name FROM passkey_users WHERE id = ?"
+  )
+    .bind(userId)
+    .first<PasskeyUserRow>();
   if (!row) return null;
   return { id: row.id, name: row.name, displayName: row.display_name };
 }
 
-export async function ensureUser(env: CloudflareEnv): Promise<StoredUser> {
-  const existing = await getUser(env);
-  if (existing) return existing;
+export async function getUserByName(env: CloudflareEnv, name: string): Promise<StoredUser | null> {
+  const row = await env.DB.prepare(
+    "SELECT id, name, display_name FROM passkey_users WHERE name = ?"
+  )
+    .bind(name)
+    .first<PasskeyUserRow>();
+  if (!row) return null;
+  return { id: row.id, name: row.name, displayName: row.display_name };
+}
 
+export async function createUser(env: CloudflareEnv, name: string, displayName: string): Promise<StoredUser> {
   const user: StoredUser = {
     id: randomUserId(),
-    name: "owner",
-    displayName: "Owner",
+    name,
+    displayName,
   };
 
   await env.DB.prepare("INSERT INTO passkey_users (id, name, display_name, created_at) VALUES (?, ?, ?, ?)")
@@ -63,6 +72,11 @@ export async function ensureUser(env: CloudflareEnv): Promise<StoredUser> {
     .run();
 
   return user;
+}
+
+export async function hasAnyUsers(env: CloudflareEnv): Promise<boolean> {
+  const row = await env.DB.prepare("SELECT 1 FROM passkey_users LIMIT 1").first();
+  return row !== null;
 }
 
 export async function listCredentials(env: CloudflareEnv, userId: string): Promise<StoredCredential[]> {

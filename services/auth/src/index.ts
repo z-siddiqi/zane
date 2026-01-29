@@ -11,28 +11,43 @@ import {
   verifyRegistrationResponse,
 } from "@simplewebauthn/server";
 
-import type { ChallengeRecord } from "./types";
+import type { ChallengeRecord, StoredCredential, StoredUser } from "./types";
 import { base64UrlDecode, base64UrlEncode, corsHeaders, getRpId, isAllowedOrigin } from "./utils";
 import { createSession, verifySession } from "./session";
 import {
-  ensureUser,
+  createUser,
   getCredential,
-  getUser,
+  getUserById,
+  getUserByName,
+  hasAnyUsers,
   listCredentials,
+  randomUserId,
   revokeSession,
   updateCounter,
   upsertCredential,
 } from "./db";
 import { CHALLENGE_TTL_MS, consumeChallenge, setChallenge } from "./challenge";
 
-interface ChallengeRequest {
-  type: "registration" | "authentication";
-  value?: string;
-  ttlMs?: number;
+interface ChallengeStoreSetRequest {
+  key: string;
+  record: ChallengeRecord;
+}
+
+interface ChallengeStoreConsumeRequest {
+  key: string;
+}
+
+interface RegisterOptionsRequest {
+  name?: string;
+  displayName?: string;
 }
 
 interface RegisterVerifyRequest {
   credential: RegistrationResponseJSON;
+}
+
+interface LoginOptionsRequest {
+  username: string;
 }
 
 interface LoginVerifyRequest {
@@ -47,32 +62,30 @@ export class PasskeyChallengeStore extends DurableObject<CloudflareEnv> {
       return new Response("Method not allowed", { status: 405 });
     }
 
-    const body = (await req.json()) as ChallengeRequest;
-    if (!body?.type) {
-      return new Response("Bad request", { status: 400 });
-    }
-
     if (url.pathname === "/set") {
-      if (typeof body.value !== "string") {
+      const body = (await req.json()) as ChallengeStoreSetRequest;
+      if (!body?.key || !body?.record) {
         return new Response("Bad request", { status: 400 });
       }
-      const ttl = typeof body.ttlMs === "number" ? body.ttlMs : CHALLENGE_TTL_MS;
-      const record: ChallengeRecord = { value: body.value, expiresAt: Date.now() + ttl };
-      await this.ctx.storage.put(body.type, record);
+      await this.ctx.storage.put(body.key, body.record);
       return Response.json({ ok: true });
     }
 
     if (url.pathname === "/consume") {
-      const record = await this.ctx.storage.get<ChallengeRecord>(body.type);
+      const body = (await req.json()) as ChallengeStoreConsumeRequest;
+      if (!body?.key) {
+        return new Response("Bad request", { status: 400 });
+      }
+      const record = await this.ctx.storage.get<ChallengeRecord>(body.key);
       if (!record) {
-        return Response.json({ value: null });
+        return Response.json({ record: null });
       }
       if (Date.now() > record.expiresAt) {
-        await this.ctx.storage.delete(body.type);
-        return Response.json({ value: null });
+        await this.ctx.storage.delete(body.key);
+        return Response.json({ record: null });
       }
-      await this.ctx.storage.delete(body.type);
-      return Response.json({ value: record.value });
+      await this.ctx.storage.delete(body.key);
+      return Response.json({ record });
     }
 
     return new Response("Not found", { status: 404 });
@@ -81,14 +94,26 @@ export class PasskeyChallengeStore extends DurableObject<CloudflareEnv> {
 
 async function handleSession(req: Request, env: CloudflareEnv): Promise<Response> {
   const session = await verifySession(req, env);
-  const user = await getUser(env);
-  const credentials = user ? await listCredentials(env, user.id) : [];
+  const systemHasUsers = await hasAnyUsers(env);
+
+  let user = null;
+  let hasPasskey = false;
+
+  if (session) {
+    const storedUser = await getUserById(env, session.sub);
+    if (storedUser) {
+      user = { id: storedUser.id, name: storedUser.name };
+      const credentials = await listCredentials(env, storedUser.id);
+      hasPasskey = credentials.length > 0;
+    }
+  }
 
   return Response.json(
     {
-      authenticated: Boolean(session),
-      user: session ? { id: session.sub, name: session.name } : null,
-      hasPasskey: credentials.length > 0,
+      authenticated: Boolean(session && user),
+      user,
+      hasPasskey,
+      systemHasUsers,
     },
     { status: 200, headers: corsHeaders(req, env) }
   );
@@ -96,33 +121,57 @@ async function handleSession(req: Request, env: CloudflareEnv): Promise<Response
 
 async function handleRegisterOptions(req: Request, env: CloudflareEnv): Promise<Response> {
   const session = await verifySession(req, env);
-  const existingUser = await getUser(env);
-  const credentials = existingUser ? await listCredentials(env, existingUser.id) : [];
+  const body = (await req.json()) as RegisterOptionsRequest;
 
-  // Allow registration if: no passkeys exist (first setup) OR user is signed in (adding device)
-  if (credentials.length > 0 && !session) {
-    return Response.json({ error: "Sign in to add another passkey." }, { status: 403, headers: corsHeaders(req, env) });
-  }
-
-  const user = existingUser ?? (await ensureUser(env));
   const origin = req.headers.get("origin");
   if (!isAllowedOrigin(origin, env)) {
     return Response.json({ error: "Origin not allowed." }, { status: 403, headers: corsHeaders(req, env) });
   }
 
-  const rpID = getRpId(origin!);
+  let userId: string;
+  let userName: string;
+  let userDisplayName: string;
+  let excludeCredentials: { id: string; transports?: StoredCredential["transports"] }[] = [];
+  let pendingUser: { id: string; name: string; displayName: string } | undefined;
 
-  const excludeCredentials = credentials.map((credential) => ({
-    id: credential.id,
-    transports: credential.transports,
-  }));
+  if (session) {
+    // Adding a passkey to an existing account
+    const existing = await getUserById(env, session.sub);
+    if (!existing) {
+      return Response.json({ error: "User not found." }, { status: 404, headers: corsHeaders(req, env) });
+    }
+    userId = existing.id;
+    userName = existing.name;
+    userDisplayName = existing.displayName;
+    const credentials = await listCredentials(env, existing.id);
+    excludeCredentials = credentials.map((c) => ({ id: c.id, transports: c.transports }));
+  } else {
+    // New user registration — defer user creation to verify step
+    const name = body.name?.trim();
+    const displayName = body.displayName?.trim() || name;
+    if (!name) {
+      return Response.json({ error: "Name is required." }, { status: 400, headers: corsHeaders(req, env) });
+    }
+
+    const existingByName = await getUserByName(env, name);
+    if (existingByName) {
+      return Response.json({ error: "Username already taken." }, { status: 409, headers: corsHeaders(req, env) });
+    }
+
+    userId = randomUserId();
+    userName = name;
+    userDisplayName = displayName!;
+    pendingUser = { id: userId, name, displayName: userDisplayName };
+  }
+
+  const rpID = getRpId(origin!);
 
   const options = await generateRegistrationOptions({
     rpName: "Zane",
     rpID,
-    userID: base64UrlDecode(user.id),
-    userName: user.name,
-    userDisplayName: user.displayName,
+    userID: base64UrlDecode(userId),
+    userName,
+    userDisplayName,
     attestationType: "none",
     timeout: CHALLENGE_TTL_MS,
     excludeCredentials,
@@ -132,7 +181,11 @@ async function handleRegisterOptions(req: Request, env: CloudflareEnv): Promise<
     },
   });
 
-  const stored = await setChallenge(env, "registration", options.challenge);
+  const stored = await setChallenge(env, options.challenge, {
+    type: "registration",
+    userId: session ? userId : undefined,
+    pendingUser,
+  });
   if (!stored) {
     return Response.json({ error: "Failed to persist challenge." }, { status: 500, headers: corsHeaders(req, env) });
   }
@@ -146,23 +199,20 @@ async function handleRegisterVerify(req: Request, env: CloudflareEnv): Promise<R
     return Response.json({ error: "Invalid payload." }, { status: 400, headers: corsHeaders(req, env) });
   }
 
-  const session = await verifySession(req, env);
-  const existingUser = await getUser(env);
-  const credentials = existingUser ? await listCredentials(env, existingUser.id) : [];
-
-  // Allow registration if: no passkeys exist (first setup) OR user is signed in (adding device)
-  if (credentials.length > 0 && !session) {
-    return Response.json({ error: "Sign in to add another passkey." }, { status: 403, headers: corsHeaders(req, env) });
-  }
-
-  const user = existingUser ?? (await ensureUser(env));
   const origin = req.headers.get("origin");
   if (!isAllowedOrigin(origin, env)) {
     return Response.json({ error: "Origin not allowed." }, { status: 403, headers: corsHeaders(req, env) });
   }
 
-  const expectedChallenge = await consumeChallenge(env, "registration");
-  if (!expectedChallenge) {
+  // Extract and consume the challenge before verification
+  const clientDataB64 = body.credential.response.clientDataJSON;
+  const clientData = JSON.parse(new TextDecoder().decode(base64UrlDecode(clientDataB64))) as { challenge?: string };
+  if (!clientData.challenge) {
+    return Response.json({ error: "Missing challenge." }, { status: 400, headers: corsHeaders(req, env) });
+  }
+
+  const challengeRecord = await consumeChallenge(env, clientData.challenge);
+  if (!challengeRecord) {
     return Response.json({ error: "Registration challenge expired." }, { status: 400, headers: corsHeaders(req, env) });
   }
 
@@ -172,7 +222,7 @@ async function handleRegisterVerify(req: Request, env: CloudflareEnv): Promise<R
   try {
     verification = await verifyRegistrationResponse({
       response: body.credential,
-      expectedChallenge,
+      expectedChallenge: challengeRecord.value,
       expectedOrigin: origin!,
       expectedRPID: rpID,
       requireUserVerification: true,
@@ -188,9 +238,29 @@ async function handleRegisterVerify(req: Request, env: CloudflareEnv): Promise<R
     return Response.json({ error: "Registration not verified." }, { status: 400, headers: corsHeaders(req, env) });
   }
 
+  // Resolve the user: existing account (adding passkey) or new registration
+  let user: StoredUser;
+  if (challengeRecord.userId) {
+    const existing = await getUserById(env, challengeRecord.userId);
+    if (!existing) {
+      return Response.json({ error: "User not found." }, { status: 404, headers: corsHeaders(req, env) });
+    }
+    user = existing;
+  } else if (challengeRecord.pendingUser) {
+    // Re-check uniqueness in case of a race between two concurrent registrations
+    const existingByName = await getUserByName(env, challengeRecord.pendingUser.name);
+    if (existingByName) {
+      return Response.json({ error: "Username already taken." }, { status: 409, headers: corsHeaders(req, env) });
+    }
+    user = await createUser(env, challengeRecord.pendingUser.name, challengeRecord.pendingUser.displayName);
+  } else {
+    return Response.json({ error: "Invalid challenge record." }, { status: 400, headers: corsHeaders(req, env) });
+  }
+
   const info = verification.registrationInfo;
   const credentialId = info.credential.id;
-  const existing = credentials.find((credential) => credential.id === credentialId);
+  const existingCredentials = await listCredentials(env, user.id);
+  const existing = existingCredentials.find((credential) => credential.id === credentialId);
 
   if (!existing) {
     await upsertCredential(env, {
@@ -216,14 +286,20 @@ async function handleRegisterVerify(req: Request, env: CloudflareEnv): Promise<R
 }
 
 async function handleLoginOptions(req: Request, env: CloudflareEnv): Promise<Response> {
-  const user = await getUser(env);
+  const body = (await req.json()) as LoginOptionsRequest;
+  const username = body.username?.trim();
+  if (!username) {
+    return Response.json({ error: "Username is required." }, { status: 400, headers: corsHeaders(req, env) });
+  }
+
+  const user = await getUserByName(env, username);
   if (!user) {
-    return Response.json({ error: "No passkey registered." }, { status: 409, headers: corsHeaders(req, env) });
+    return Response.json({ error: "Invalid credentials." }, { status: 400, headers: corsHeaders(req, env) });
   }
 
   const credentials = await listCredentials(env, user.id);
   if (credentials.length === 0) {
-    return Response.json({ error: "No passkey registered." }, { status: 409, headers: corsHeaders(req, env) });
+    return Response.json({ error: "Invalid credentials." }, { status: 400, headers: corsHeaders(req, env) });
   }
 
   const origin = req.headers.get("origin");
@@ -245,7 +321,7 @@ async function handleLoginOptions(req: Request, env: CloudflareEnv): Promise<Res
     userVerification: "required",
   });
 
-  const stored = await setChallenge(env, "authentication", options.challenge);
+  const stored = await setChallenge(env, options.challenge, { type: "authentication", userId: user.id });
   if (!stored) {
     return Response.json({ error: "Failed to persist challenge." }, { status: 500, headers: corsHeaders(req, env) });
   }
@@ -259,27 +335,34 @@ async function handleLoginVerify(req: Request, env: CloudflareEnv): Promise<Resp
     return Response.json({ error: "Invalid payload." }, { status: 400, headers: corsHeaders(req, env) });
   }
 
-  const user = await getUser(env);
-  if (!user) {
-    return Response.json({ error: "User not initialized." }, { status: 409, headers: corsHeaders(req, env) });
-  }
-
   const origin = req.headers.get("origin");
   if (!isAllowedOrigin(origin, env)) {
     return Response.json({ error: "Origin not allowed." }, { status: 403, headers: corsHeaders(req, env) });
   }
 
-  const expectedChallenge = await consumeChallenge(env, "authentication");
-  if (!expectedChallenge) {
+  const credential = await getCredential(env, body.credential.id);
+  if (!credential) {
+    return Response.json({ error: "Unknown credential." }, { status: 400, headers: corsHeaders(req, env) });
+  }
+
+  const user = await getUserById(env, credential.userId);
+  if (!user) {
+    return Response.json({ error: "User not found." }, { status: 404, headers: corsHeaders(req, env) });
+  }
+
+  // Extract challenge from clientDataJSON to consume the stored record
+  const clientDataB64 = body.credential.response.clientDataJSON;
+  const clientData = JSON.parse(new TextDecoder().decode(base64UrlDecode(clientDataB64))) as { challenge?: string };
+  if (!clientData.challenge) {
+    return Response.json({ error: "Missing challenge." }, { status: 400, headers: corsHeaders(req, env) });
+  }
+
+  const challengeRecord = await consumeChallenge(env, clientData.challenge);
+  if (!challengeRecord) {
     return Response.json(
       { error: "Authentication challenge expired." },
       { status: 400, headers: corsHeaders(req, env) }
     );
-  }
-
-  const credential = await getCredential(env, body.credential.id);
-  if (!credential) {
-    return Response.json({ error: "Unknown credential." }, { status: 400, headers: corsHeaders(req, env) });
   }
 
   const rpID = getRpId(origin!);
@@ -288,7 +371,7 @@ async function handleLoginVerify(req: Request, env: CloudflareEnv): Promise<Resp
   try {
     verification = await verifyAuthenticationResponse({
       response: body.credential,
-      expectedChallenge,
+      expectedChallenge: challengeRecord.value,
       expectedOrigin: origin!,
       expectedRPID: rpID,
       requireUserVerification: true,

@@ -24,5 +24,8 @@ export interface SessionPayload {
 
 export interface ChallengeRecord {
   value: string;
+  type: "registration" | "authentication";
+  userId?: string;
+  pendingUser?: { id: string; name: string; displayName: string };
   expiresAt: number;
 }

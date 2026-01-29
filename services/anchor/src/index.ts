@@ -5,6 +5,7 @@ const AUTOSTART = (process.env.ANCHOR_AUTOSTART ?? "true").toLowerCase() === "tr
 const ORBIT_URL = process.env.ANCHOR_ORBIT_URL ?? "";
 const ZANE_ANCHOR_JWT_SECRET = process.env.ZANE_ANCHOR_JWT_SECRET ?? "";
 const ANCHOR_APP_CWD = process.env.ANCHOR_APP_CWD ?? process.cwd();
+const USER_ID = process.env.USER_ID;
 const ANCHOR_JWT_TTL_SEC = Number(process.env.ANCHOR_JWT_TTL_SEC ?? 300);
 const ORBIT_RECONNECT_DELAY_MS = 2000;
 const ORBIT_HEARTBEAT_INTERVAL_MS = 30000;
@@ -12,6 +13,11 @@ const ORBIT_HEARTBEAT_TIMEOUT_MS = 10000;
 
 if (ORBIT_URL && !ZANE_ANCHOR_JWT_SECRET) {
   console.error("[anchor] ZANE_ANCHOR_JWT_SECRET is required when ANCHOR_ORBIT_URL is set");
+  process.exit(1);
+}
+
+if (ORBIT_URL && !USER_ID) {
+  console.error("[anchor] USER_ID is required when ANCHOR_ORBIT_URL is set");
   process.exit(1);
 }
 
@@ -244,7 +250,7 @@ async function buildOrbitUrl(): Promise<string | null> {
         {
           iss: "zane-anchor",
           aud: "zane-orbit-anchor",
-          sub: "anchor",
+          sub: USER_ID,
           iat: now,
           exp: now + ANCHOR_JWT_TTL_SEC,
         },

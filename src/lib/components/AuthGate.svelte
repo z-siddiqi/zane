@@ -3,6 +3,10 @@
     import { auth } from "../auth.svelte";
 
     const { children }: { children: Snippet } = $props();
+
+    let username = $state("");
+    let newUsername = $state("");
+    let mode = $state<"login" | "register">("login");
 </script>
 
 {#if auth.status === "loading"}
@@ -14,29 +18,87 @@
     </div>
 {:else if auth.status === "signed_in"}
     {@render children()}
-{:else}
+{:else if auth.status === "needs_setup"}
     <div class="auth-shell stack">
         <div class="auth-card stack">
-            <div class="auth-title">Passkey required</div>
-            <div class="auth-subtitle">Use your passkey to unlock Zane.</div>
+            <div class="auth-title">Welcome to Zane</div>
+            <div class="auth-subtitle">Create your account to get started.</div>
 
             {#if auth.error}
                 <div class="auth-error">{auth.error}</div>
             {/if}
 
-            {#if !auth.hasPasskey}
-                <div class="auth-note">No passkey is configured yet.</div>
+            <input
+                type="text"
+                class="auth-input"
+                placeholder="Username"
+                bind:value={newUsername}
+                onkeydown={(e) => { if (e.key === "Enter" && newUsername.trim()) auth.register(newUsername.trim()); }}
+            />
+            <button
+                type="button"
+                class="primary"
+                onclick={() => auth.register(newUsername.trim())}
+                disabled={auth.busy || !newUsername.trim()}
+            >
+                {auth.busy ? "Working..." : "Create passkey"}
+            </button>
+        </div>
+    </div>
+{:else}
+    <div class="auth-shell stack">
+        <div class="auth-card stack">
+            {#if mode === "login"}
+                <div class="auth-title">Sign in</div>
+                <div class="auth-subtitle">Use your passkey to unlock Zane.</div>
+
+                {#if auth.error}
+                    <div class="auth-error">{auth.error}</div>
+                {/if}
+
+                <input
+                    type="text"
+                    class="auth-input"
+                    placeholder="Username"
+                    bind:value={username}
+                    onkeydown={(e) => { if (e.key === "Enter" && username.trim()) auth.signIn(username.trim()); }}
+                />
                 <button
                     type="button"
                     class="primary"
-                    onclick={() => auth.register()}
-                    disabled={auth.busy}
+                    onclick={() => auth.signIn(username.trim())}
+                    disabled={auth.busy || !username.trim()}
+                >
+                    {auth.busy ? "Working..." : "Sign in with passkey"}
+                </button>
+                <button type="button" class="link" onclick={() => { mode = "register"; auth.error = null; }}>
+                    Create new account
+                </button>
+            {:else}
+                <div class="auth-title">Create account</div>
+                <div class="auth-subtitle">Register a new account with a passkey.</div>
+
+                {#if auth.error}
+                    <div class="auth-error">{auth.error}</div>
+                {/if}
+
+                <input
+                    type="text"
+                    class="auth-input"
+                    placeholder="Username"
+                    bind:value={newUsername}
+                    onkeydown={(e) => { if (e.key === "Enter" && newUsername.trim()) auth.register(newUsername.trim()); }}
+                />
+                <button
+                    type="button"
+                    class="primary"
+                    onclick={() => auth.register(newUsername.trim())}
+                    disabled={auth.busy || !newUsername.trim()}
                 >
                     {auth.busy ? "Working..." : "Create passkey"}
                 </button>
-            {:else}
-                <button type="button" class="primary" onclick={() => auth.signIn()} disabled={auth.busy}>
-                    {auth.busy ? "Working..." : "Sign in with passkey"}
+                <button type="button" class="link" onclick={() => { mode = "login"; auth.error = null; }}>
+                    Back to sign in
                 </button>
             {/if}
         </div>
@@ -71,9 +133,19 @@
         font-size: var(--text-sm);
     }
 
-    .auth-note {
-        color: var(--cli-text-dim);
+    .auth-input {
+        padding: var(--space-sm) var(--space-md);
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--cli-border);
+        background: var(--cli-bg);
+        color: var(--cli-text);
+        font-family: var(--font-mono);
         font-size: var(--text-sm);
+        outline: none;
+    }
+
+    .auth-input:focus {
+        border-color: var(--cli-text-dim);
     }
 
     .auth-error {
@@ -93,6 +165,22 @@
         color: var(--color-btn-primary-text);
         font-family: var(--font-mono);
         cursor: pointer;
+    }
+
+    button.link {
+        align-self: flex-start;
+        padding: 0;
+        border: none;
+        background: none;
+        color: var(--cli-text-dim);
+        font-family: var(--font-mono);
+        font-size: var(--text-sm);
+        cursor: pointer;
+        text-decoration: underline;
+    }
+
+    button.link:hover {
+        color: var(--cli-text);
     }
 
     button:disabled {

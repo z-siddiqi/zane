@@ -19,6 +19,7 @@ interface AuthSessionResponse {
   authenticated: boolean;
   user: AuthUser | null;
   hasPasskey: boolean;
+  systemHasUsers: boolean;
 }
 
 interface AuthVerifyResponse {
@@ -87,7 +88,7 @@ class AuthStore {
       } else {
         this.token = null;
         this.#clearToken();
-        this.status = this.hasPasskey ? "signed_out" : "needs_setup";
+        this.status = data.systemHasUsers ? "signed_out" : "needs_setup";
       }
     } catch {
       this.error = "Auth service unavailable.";
@@ -95,7 +96,7 @@ class AuthStore {
     }
   }
 
-  async signIn(): Promise<void> {
+  async signIn(username: string): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     this.error = null;
@@ -103,6 +104,8 @@ class AuthStore {
     try {
       const optionsResponse = await fetch(apiUrl("/auth/login/options"), {
         method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username }),
       });
       const options = await parseResponse<LoginOptionsResponse>(optionsResponse);
       if (!optionsResponse.ok || !options || options.error) {
@@ -131,7 +134,7 @@ class AuthStore {
     }
   }
 
-  async register(): Promise<void> {
+  async register(name: string, displayName?: string): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     this.error = null;
@@ -140,6 +143,7 @@ class AuthStore {
       const optionsResponse = await fetch(apiUrl("/auth/register/options"), {
         method: "POST",
         headers: { "content-type": "application/json", ...this.#authHeaders() },
+        body: JSON.stringify({ name, displayName: displayName || name }),
       });
       const options = await parseResponse<RegisterOptionsResponse>(optionsResponse);
       if (!optionsResponse.ok || !options || options.error) {
@@ -181,7 +185,7 @@ class AuthStore {
     }
     this.token = null;
     this.user = null;
-    this.status = this.hasPasskey ? "signed_out" : "needs_setup";
+    this.status = "signed_out";
     this.error = null;
     this.#clearToken();
   }

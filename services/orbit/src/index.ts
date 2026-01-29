@@ -82,18 +82,33 @@ async function verifyJwtHs256(
   return await crypto.subtle.verify("HMAC", key, signature, data);
 }
 
-async function isAuthorised(req: Request, env: Env): Promise<boolean> {
+interface AuthResult {
+  authorized: boolean;
+  userId: string | null;
+  jwtType: "web" | "anchor" | null;
+}
+
+function extractJwtSub(token: string): string | null {
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  const payload = parseJwtPart<{ sub?: string }>(parts[1]);
+  return payload?.sub ?? null;
+}
+
+async function isAuthorised(req: Request, env: Env): Promise<AuthResult> {
+  const denied: AuthResult = { authorized: false, userId: null, jwtType: null };
+
   const userSecret = env.ZANE_WEB_JWT_SECRET?.trim();
   const anchorSecret = env.ZANE_ANCHOR_JWT_SECRET?.trim();
   if (!userSecret && !anchorSecret) {
     console.error("[orbit] auth: no secrets configured, denying request");
-    return false;
+    return denied;
   }
 
   const provided = (getAuthToken(req) ?? "").trim();
   if (!provided) {
     console.warn("[orbit] auth: missing token");
-    return false;
+    return denied;
   }
 
   if (userSecret) {
@@ -102,8 +117,9 @@ async function isAuthorised(req: Request, env: Env): Promise<boolean> {
       audience: JWT_AUDIENCE_WEB,
     });
     if (ok) {
-      console.log("[orbit] auth: web JWT accepted");
-      return true;
+      const userId = extractJwtSub(provided);
+      console.log(`[orbit] auth: web JWT accepted, userId=${userId}`);
+      return { authorized: true, userId, jwtType: "web" };
     }
   }
 
@@ -113,13 +129,14 @@ async function isAuthorised(req: Request, env: Env): Promise<boolean> {
       audience: JWT_AUDIENCE_ANCHOR,
     });
     if (ok) {
-      console.log("[orbit] auth: anchor JWT accepted");
-      return true;
+      const userId = extractJwtSub(provided);
+      console.log(`[orbit] auth: anchor JWT accepted, userId=${userId}`);
+      return { authorized: true, userId, jwtType: "anchor" };
     }
   }
 
   console.warn("[orbit] auth: token rejected");
-  return false;
+  return denied;
 }
 
 function getRoleFromPath(pathname: string): Role | null {
@@ -202,9 +219,12 @@ function extractMethod(message: Record<string, unknown>): string | null {
   return null;
 }
 
-async function fetchThreadEvents(req: Request, env: Env, origin: string | null): Promise<Response> {
+async function fetchThreadEvents(req: Request, env: Env, origin: string | null, userId: string | null): Promise<Response> {
   if (!env.DB) {
     return new Response("D1 not configured", { status: 501, headers: corsHeaders(origin) });
+  }
+  if (!userId) {
+    return new Response("Unauthorised: missing user identity", { status: 401, headers: corsHeaders(origin) });
   }
   const url = new URL(req.url);
   const parts = url.pathname.split("/").filter(Boolean);
@@ -213,7 +233,7 @@ async function fetchThreadEvents(req: Request, env: Env, origin: string | null):
     return new Response("Not found", { status: 404, headers: corsHeaders(origin) });
   }
 
-  const query = env.DB.prepare("SELECT payload FROM events WHERE thread_id = ? ORDER BY id ASC").bind(threadId);
+  const query = env.DB.prepare("SELECT payload FROM events WHERE thread_id = ? AND user_id = ? ORDER BY id ASC").bind(threadId, userId);
   const { results } = await query.all<{ payload: string }>();
   const lines = results.map((row) => row.payload).join("\n");
   const body = lines ? `${lines}\n` : "";
@@ -244,12 +264,13 @@ export default {
     }
 
     if (req.method === "GET" && url.pathname.startsWith("/threads/") && url.pathname.endsWith("/events")) {
-      if (!(await isAuthorised(req, env))) {
+      const authResult = await isAuthorised(req, env);
+      if (!authResult.authorized) {
         console.warn(`[orbit] events auth failed: ${url.pathname}`);
         return new Response("Unauthorised", { status: 401, headers: corsHeaders(origin) });
       }
       console.log(`[orbit] events request: ${url.pathname}`);
-      return fetchThreadEvents(req, env, origin);
+      return fetchThreadEvents(req, env, origin, authResult.userId);
     }
 
     const role = getRoleFromPath(url.pathname);
@@ -257,20 +278,27 @@ export default {
       return new Response("Not found", { status: 404 });
     }
 
-    if (!(await isAuthorised(req, env))) {
+    const authResult = await isAuthorised(req, env);
+    if (!authResult.authorized) {
       console.warn(`[orbit] ws auth failed: ${url.pathname}`);
       return new Response("Unauthorised", { status: 401 });
+    }
+
+    if (!authResult.userId) {
+      console.warn(`[orbit] ws auth: no userId in token`);
+      return new Response("Unauthorised: missing user identity", { status: 401 });
     }
 
     if (req.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Upgrade required", { status: 426 });
     }
 
-    console.log(`[orbit] ws upgrade accepted: ${url.pathname}`);
-    const id = env.ORBIT_DO.idFromName("default");
+    console.log(`[orbit] ws upgrade accepted: ${url.pathname} userId=${authResult.userId}`);
+    const id = env.ORBIT_DO.idFromName(authResult.userId);
     const stub = env.ORBIT_DO.get(id);
     const nextReq = new Request(req, { headers: new Headers(req.headers) });
     nextReq.headers.set("x-orbit-role", role);
+    nextReq.headers.set("x-orbit-user-id", authResult.userId);
 
     return stub.fetch(nextReq);
   },
@@ -278,6 +306,7 @@ export default {
 
 export class OrbitRelay {
   private env: Env;
+  private userId: string | null = null;
 
   // Socket -> subscribed thread IDs
   private clientSockets = new Map<WebSocket, Set<string>>();
@@ -300,6 +329,12 @@ export class OrbitRelay {
     if (role !== "client" && role !== "anchor") {
       return new Response("Missing role", { status: 400 });
     }
+
+    const userId = req.headers.get("x-orbit-user-id");
+    if (!userId) {
+      return new Response("Missing user identity", { status: 400 });
+    }
+    this.userId = userId;
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
@@ -532,10 +567,11 @@ export class OrbitRelay {
 
     try {
       await this.env.DB.prepare(
-        "INSERT INTO events (thread_id, turn_id, direction, role, method, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO events (thread_id, user_id, turn_id, direction, role, method, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
       )
         .bind(
           threadId,
+          this.userId,
           turnId,
           direction,
           direction === "client" ? "client" : "anchor",
