@@ -278,8 +278,14 @@ export default {
 
 export class OrbitRelay {
   private env: Env;
-  private clientSockets = new Set<WebSocket>();
-  private anchorSockets = new Set<WebSocket>();
+
+  // Socket -> subscribed thread IDs
+  private clientSockets = new Map<WebSocket, Set<string>>();
+  private anchorSockets = new Map<WebSocket, Set<string>>();
+
+  // Thread ID -> subscribed sockets (reverse index for fast routing)
+  private threadToClients = new Map<string, Set<WebSocket>>();
+  private threadToAnchors = new Map<string, Set<WebSocket>>();
 
   constructor(_state: DurableObjectState, env: Env) {
     this.env = env;
@@ -309,7 +315,6 @@ export class OrbitRelay {
 
   private registerSocket(socket: WebSocket, role: Role): void {
     const source = role === "client" ? this.clientSockets : this.anchorSockets;
-    const targets = role === "client" ? this.anchorSockets : this.clientSockets;
     const direction: Direction = role === "client" ? "client" : "server";
 
     if (role === "client" && this.anchorSockets.size === 0) {
@@ -321,7 +326,7 @@ export class OrbitRelay {
       return;
     }
 
-    source.add(socket);
+    source.set(socket, new Set());
 
     socket.send(
       JSON.stringify({
@@ -336,18 +341,19 @@ export class OrbitRelay {
         return;
       }
 
-      this.logEvent(event.data, direction);
-      for (const target of targets) {
-        try {
-          target.send(event.data);
-        } catch (err) {
-          console.warn("[orbit] failed to relay message", err);
-        }
+      const payloadStr = this.dataToString(event.data);
+      const parsed = payloadStr ? parseJsonMessage(payloadStr) : null;
+
+      if (this.handleSubscription(socket, role, parsed)) {
+        return;
       }
+
+      this.logEvent(event.data, direction);
+      this.routeMessage(socket, role, event.data, parsed);
     });
 
     const cleanup = () => {
-      source.delete(socket);
+      this.removeSocket(socket, role);
       try {
         socket.close();
       } catch {
@@ -359,17 +365,132 @@ export class OrbitRelay {
     socket.addEventListener("error", cleanup);
   }
 
-  private handlePing(socket: WebSocket, data: unknown): boolean {
-    let payload = "";
-    if (typeof data === "string") {
-      payload = data;
-    } else if (data instanceof ArrayBuffer) {
-      payload = new TextDecoder().decode(data);
-    } else if (data instanceof Uint8Array) {
-      payload = new TextDecoder().decode(data);
-    } else {
-      return false;
+  private handleSubscription(socket: WebSocket, role: Role, msg: Record<string, unknown> | null): boolean {
+    if (!msg) return false;
+
+    if (msg.type === "orbit.subscribe" && typeof msg.threadId === "string") {
+      this.subscribeSocket(socket, role, msg.threadId);
+      try {
+        socket.send(JSON.stringify({ type: "orbit.subscribed", threadId: msg.threadId }));
+      } catch {
+        // ignore
+      }
+      console.log(`[orbit] ${role} subscribed to thread ${msg.threadId}`);
+      return true;
     }
+
+    if (msg.type === "orbit.unsubscribe" && typeof msg.threadId === "string") {
+      this.unsubscribeSocket(socket, role, msg.threadId);
+      console.log(`[orbit] ${role} unsubscribed from thread ${msg.threadId}`);
+      return true;
+    }
+
+    return false;
+  }
+
+  private subscribeSocket(socket: WebSocket, role: Role, threadId: string): void {
+    const socketThreads = role === "client"
+      ? this.clientSockets.get(socket)
+      : this.anchorSockets.get(socket);
+
+    if (socketThreads) {
+      socketThreads.add(threadId);
+    }
+
+    const threadSockets = role === "client" ? this.threadToClients : this.threadToAnchors;
+    if (!threadSockets.has(threadId)) {
+      threadSockets.set(threadId, new Set());
+    }
+    threadSockets.get(threadId)!.add(socket);
+  }
+
+  private unsubscribeSocket(socket: WebSocket, role: Role, threadId: string): void {
+    const socketThreads = role === "client"
+      ? this.clientSockets.get(socket)
+      : this.anchorSockets.get(socket);
+
+    if (socketThreads) {
+      socketThreads.delete(threadId);
+    }
+
+    const threadSockets = role === "client" ? this.threadToClients : this.threadToAnchors;
+    const sockets = threadSockets.get(threadId);
+    if (sockets) {
+      sockets.delete(socket);
+      if (sockets.size === 0) {
+        threadSockets.delete(threadId);
+      }
+    }
+  }
+
+  private removeSocket(socket: WebSocket, role: Role): void {
+    const source = role === "client" ? this.clientSockets : this.anchorSockets;
+    const threadSockets = role === "client" ? this.threadToClients : this.threadToAnchors;
+
+    const threads = source.get(socket);
+    if (threads) {
+      for (const threadId of threads) {
+        const sockets = threadSockets.get(threadId);
+        if (sockets) {
+          sockets.delete(socket);
+          if (sockets.size === 0) {
+            threadSockets.delete(threadId);
+          }
+        }
+      }
+    }
+
+    source.delete(socket);
+  }
+
+  private routeMessage(socket: WebSocket, role: Role, data: string | ArrayBuffer | ArrayBufferView, msg: Record<string, unknown> | null): void {
+    const threadId = msg ? extractThreadId(msg) : null;
+
+    if (role === "client") {
+      // TODO: broadcasts to all anchors — won't scale if multiple anchors serve distinct threads
+      for (const target of this.anchorSockets.keys()) {
+        try {
+          target.send(data);
+        } catch (err) {
+          console.warn("[orbit] failed to relay message", err);
+        }
+      }
+    } else {
+      // Anchor → client: thread-scoped messages go to subscribers only
+      if (threadId) {
+        const targets = this.threadToClients.get(threadId);
+        if (targets && targets.size > 0) {
+          for (const target of targets) {
+            try {
+              target.send(data);
+            } catch (err) {
+              console.warn("[orbit] failed to relay message", err);
+            }
+          }
+          return;
+        }
+      }
+      // No threadId or no subscribers yet — broadcast to all clients
+      for (const target of this.clientSockets.keys()) {
+        try {
+          target.send(data);
+        } catch (err) {
+          console.warn("[orbit] failed to relay message", err);
+        }
+      }
+    }
+  }
+
+  private dataToString(data: unknown): string | null {
+    if (typeof data === "string") return data;
+    if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
+    if (data instanceof Uint8Array) return new TextDecoder().decode(data);
+    return null;
+  }
+
+  private handlePing(socket: WebSocket, data: unknown): boolean {
+    const payload = this.dataToString(data);
+    if (!payload) return false;
 
     const trimmed = payload.trim();
     if (trimmed === '{"type":"ping"}' || trimmed === '"ping"') {
@@ -392,16 +513,8 @@ export class OrbitRelay {
   private async logEvent(data: unknown, direction: Direction): Promise<void> {
     if (!this.env.DB) return;
 
-    let payloadStr = "";
-    if (typeof data === "string") {
-      payloadStr = data;
-    } else if (data instanceof ArrayBuffer) {
-      payloadStr = new TextDecoder().decode(data);
-    } else if (data instanceof Uint8Array) {
-      payloadStr = new TextDecoder().decode(data);
-    } else {
-      return;
-    }
+    const payloadStr = this.dataToString(data);
+    if (!payloadStr) return;
 
     const message = parseJsonMessage(payloadStr);
     if (!message) return;

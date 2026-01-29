@@ -63,6 +63,7 @@ class ThreadsStore {
     this.loading = true;
     this.currentId = threadId;
     messages.clearThread(threadId);
+    socket.subscribeThread(threadId);
     this.#pendingRequests.set(id, "resume");
     socket.send({
       method: "thread/resume",
@@ -87,6 +88,7 @@ class ThreadsStore {
   archive(threadId: string) {
     const id = Date.now();
     this.#pendingRequests.set(id, "archive");
+    socket.unsubscribeThread(threadId);
     socket.send({
       method: "thread/archive",
       id,
@@ -108,6 +110,8 @@ class ThreadsStore {
     if (msg.method === "thread/started") {
       const params = msg.params as { thread: ThreadInfo };
       if (params?.thread) {
+        // Idempotent: covers new threads (not opened via open()) that need subscribing
+        socket.subscribeThread(params.thread.id);
         this.list = [params.thread, ...this.list];
         this.currentId = params.thread.id;
         if (this.#pendingStartCallback) {

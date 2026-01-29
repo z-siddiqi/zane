@@ -352,23 +352,7 @@ class MessagesStore {
     if (!params) return;
 
     const threadId = this.#extractThreadId(params);
-    if (!threadId) {
-      // Handle task_complete events that use conversationId instead of threadId.
-      if (method === "codex/event/task_complete") {
-        const conversationId = params.conversationId as string | undefined;
-        const msgPayload = params.msg as { last_agent_message?: string } | undefined;
-        const lastMessage = msgPayload?.last_agent_message?.trim();
-        if (conversationId && lastMessage) {
-          this.#upsert(conversationId, {
-            id: `task-complete-${conversationId}`,
-            role: "assistant",
-            text: lastMessage,
-            threadId: conversationId,
-          });
-        }
-      }
-      return;
-    }
+    if (!threadId) return;
 
     // Item started - handle user messages
     if (method === "item/started") {
