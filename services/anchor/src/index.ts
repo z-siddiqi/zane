@@ -15,7 +15,9 @@ if (ORBIT_URL && !ZANE_ANCHOR_JWT_SECRET) {
   process.exit(1);
 }
 
+const MAX_SUBSCRIBED_THREADS = 1000;
 const clients = new Set<WsClient>();
+const subscribedThreads = new Set<string>();
 let appServer: Bun.Subprocess | null = null;
 let appServerStarting = false;
 let orbitSocket: WebSocket | null = null;
@@ -47,6 +49,15 @@ function ensureAppServer(): void {
     });
 
     streamLines(appServer.stdout, (line) => {
+      // Auto-subscribe to threads from app-server messages
+      const parsed = parseJsonRpcMessage(line);
+      if (parsed) {
+        const threadId = extractThreadId(parsed);
+        if (threadId) {
+          subscribeToThread(threadId);
+        }
+      }
+
       for (const client of clients) {
         try {
           client.send(line);
@@ -137,6 +148,68 @@ function parseJsonRpcMessage(payload: string): JsonObject | null {
     return null;
   }
   return null;
+}
+
+function asRecord(value: unknown): JsonObject | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as JsonObject;
+}
+
+function extractThreadId(message: JsonObject): string | null {
+  const params = asRecord(message.params);
+  const result = asRecord(message.result);
+  const threadFromParams = asRecord(params?.thread);
+  const threadFromResult = asRecord(result?.thread);
+
+  const candidates = [
+    params?.threadId,
+    params?.thread_id,
+    result?.threadId,
+    result?.thread_id,
+    threadFromParams?.id,
+    threadFromResult?.id,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate;
+    if (typeof candidate === "number") return String(candidate);
+  }
+
+  return null;
+}
+
+function subscribeToThread(threadId: string): void {
+  if (subscribedThreads.has(threadId)) return;
+  if (!orbitSocket || orbitSocket.readyState !== WebSocket.OPEN) return;
+
+  subscribedThreads.add(threadId);
+  if (subscribedThreads.size > MAX_SUBSCRIBED_THREADS) {
+    const oldest = subscribedThreads.values().next().value;
+    if (oldest) subscribedThreads.delete(oldest);
+  }
+  try {
+    orbitSocket.send(JSON.stringify({ type: "orbit.subscribe", threadId }));
+    console.log(`[anchor] subscribed to thread ${threadId}`);
+  } catch (err) {
+    console.warn("[anchor] failed to subscribe to thread", err);
+    subscribedThreads.delete(threadId);
+  }
+}
+
+function resubscribeAllThreads(): void {
+  if (!orbitSocket || orbitSocket.readyState !== WebSocket.OPEN) return;
+
+  for (const threadId of subscribedThreads) {
+    try {
+      orbitSocket.send(JSON.stringify({ type: "orbit.subscribe", threadId }));
+    } catch (err) {
+      console.warn("[anchor] failed to resubscribe to thread", err);
+    }
+  }
+
+  if (subscribedThreads.size > 0) {
+    console.log(`[anchor] resubscribed to ${subscribedThreads.size} thread(s)`);
+  }
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
@@ -234,6 +307,7 @@ async function connectOrbit(): Promise<void> {
     ws.send(JSON.stringify({ type: "anchor.hello", ts: new Date().toISOString() }));
     console.log("[anchor] connected to orbit");
     startOrbitHeartbeat(ws);
+    resubscribeAllThreads();
   });
 
   ws.addEventListener("message", (event) => {
@@ -252,9 +326,24 @@ async function connectOrbit(): Promise<void> {
       return;
     }
 
+    // Filter out orbit protocol messages
+    try {
+      const parsed = JSON.parse(text) as JsonObject;
+      if (typeof parsed.type === "string" && (parsed.type as string).startsWith("orbit.")) {
+        return;
+      }
+    } catch {
+      // Not JSON, continue
+    }
+
     ensureAppServer();
     const message = parseJsonRpcMessage(text);
     if (message && ("method" in message || "id" in message)) {
+      // Auto-subscribe to threads from orbit messages
+      const threadId = extractThreadId(message);
+      if (threadId) {
+        subscribeToThread(threadId);
+      }
       sendToAppServer(text.trim() + "\n");
     }
   });

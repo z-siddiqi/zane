@@ -22,6 +22,7 @@ class SocketStore {
   #heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   #heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
   #intentionalDisconnect = false;
+  #subscribedThreads = new Set<string>();
 
   get url() {
     return this.#url;
@@ -63,6 +64,7 @@ class SocketStore {
       this.status = "connected";
       this.error = null;
       this.#startHeartbeat();
+      this.#resubscribeThreads();
       for (const handler of this.#connectHandlers) {
         handler();
       }
@@ -99,9 +101,15 @@ class SocketStore {
       }
 
       try {
-        const msg = JSON.parse(event.data) as RpcMessage;
+        const msg = JSON.parse(event.data) as Record<string, unknown>;
+
+        // Filter out orbit protocol messages
+        if (typeof msg.type === "string" && msg.type.startsWith("orbit.")) {
+          return;
+        }
+
         for (const handler of this.#messageHandlers) {
-          handler(msg);
+          handler(msg as RpcMessage);
         }
       } catch {
         console.error("Failed to parse message:", event.data);
@@ -111,6 +119,7 @@ class SocketStore {
 
   disconnect() {
     this.#intentionalDisconnect = true;
+    this.#subscribedThreads.clear();
     this.#cleanup();
     this.status = "disconnected";
     this.error = null;
@@ -143,6 +152,35 @@ class SocketStore {
   reconnect() {
     if (this.status === "connected") return;
     this.#connect(this.#url, this.#token);
+  }
+
+  subscribeThread(threadId: string): SendResult {
+    this.#subscribedThreads.add(threadId);
+    return this.#sendRaw({ type: "orbit.subscribe", threadId });
+  }
+
+  unsubscribeThread(threadId: string): SendResult {
+    this.#subscribedThreads.delete(threadId);
+    return this.#sendRaw({ type: "orbit.unsubscribe", threadId });
+  }
+
+  #sendRaw(message: Record<string, unknown>): SendResult {
+    if (!this.#socket || this.#socket.readyState !== WebSocket.OPEN) {
+      return { success: false, error: "Not connected" };
+    }
+
+    try {
+      this.#socket.send(JSON.stringify(message));
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : "Send failed" };
+    }
+  }
+
+  #resubscribeThreads() {
+    for (const threadId of this.#subscribedThreads) {
+      this.#sendRaw({ type: "orbit.subscribe", threadId });
+    }
   }
 
   #startHeartbeat() {
