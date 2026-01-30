@@ -29,3 +29,11 @@ export interface ChallengeRecord {
   pendingUser?: { id: string; name: string; displayName: string };
   expiresAt: number;
 }
+
+export interface DeviceCodeRecord {
+  deviceCode: string;
+  userCode: string;
+  status: "pending" | "authorised";
+  userId?: string;
+  expiresAt: number;
+}
