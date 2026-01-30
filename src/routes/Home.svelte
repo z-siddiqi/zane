@@ -147,6 +147,10 @@ PROJECT: ${projectPath || "Not specified"}`;
   });
 </script>
 
+<svelte:head>
+  <title>Zane</title>
+</svelte:head>
+
 <div class="home stack">
   <AppHeader status={socket.status}>
     {#snippet actions()}

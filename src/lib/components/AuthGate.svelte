@@ -1,6 +1,7 @@
 <script lang="ts">
     import type { Snippet } from "svelte";
     import { auth } from "../auth.svelte";
+    import { route } from "../../router";
 
     const { children }: { children: Snippet } = $props();
 
@@ -16,7 +17,7 @@
             <div class="auth-subtitle">Waiting for passkey status...</div>
         </div>
     </div>
-{:else if auth.status === "signed_in"}
+{:else if auth.status === "signed_in" || route.pathname === "/"}
     {@render children()}
 {:else if auth.status === "needs_setup"}
     <div class="auth-shell stack">
