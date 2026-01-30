@@ -219,6 +219,13 @@ function extractMethod(message: Record<string, unknown>): string | null {
   return null;
 }
 
+const STORED_METHODS = new Set([
+  "turn/start",
+  "turn/started",
+  "turn/diff/updated",
+  "item/started",
+]);
+
 async function fetchThreadEvents(req: Request, env: Env, origin: string | null, userId: string | null): Promise<Response> {
   if (!env.DB) {
     return new Response("D1 not configured", { status: 501, headers: corsHeaders(origin) });
@@ -610,6 +617,7 @@ export class OrbitRelay {
     if (!threadId) return;
 
     const method = extractMethod(message);
+    if (!method || !STORED_METHODS.has(method)) return;
     const turnId = extractTurnId(message);
     const entry = {
       ts: new Date().toISOString(),
