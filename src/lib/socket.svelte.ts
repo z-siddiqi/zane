@@ -17,6 +17,7 @@ class SocketStore {
   #token: string | null = null;
   #messageHandlers = new Set<(msg: RpcMessage) => void>();
   #connectHandlers = new Set<() => void>();
+  #protocolHandlers = new Set<(msg: Record<string, unknown>) => void>();
   #heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   #heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
   #intentionalDisconnect = false;
@@ -107,8 +108,17 @@ class SocketStore {
       try {
         const msg = JSON.parse(event.data) as Record<string, unknown>;
 
-        // Filter out orbit protocol messages
+        // Handle orbit protocol messages
         if (typeof msg.type === "string" && msg.type.startsWith("orbit.")) {
+          if (
+            msg.type === "orbit.anchors" ||
+            msg.type === "orbit.anchor-connected" ||
+            msg.type === "orbit.anchor-disconnected"
+          ) {
+            for (const handler of this.#protocolHandlers) {
+              handler(msg);
+            }
+          }
           return;
         }
 
@@ -151,6 +161,15 @@ class SocketStore {
     this.#connectHandlers.add(handler);
     if (this.status === "connected") handler();
     return () => this.#connectHandlers.delete(handler);
+  }
+
+  onProtocol(handler: (msg: Record<string, unknown>) => void) {
+    this.#protocolHandlers.add(handler);
+    return () => this.#protocolHandlers.delete(handler);
+  }
+
+  requestAnchors(): SendResult {
+    return this.#sendRaw({ type: "orbit.list-anchors" });
   }
 
   reconnect() {

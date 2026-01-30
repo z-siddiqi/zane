@@ -83,7 +83,7 @@ async function verifyJwtHs256(
 }
 
 interface AuthResult {
-  authorized: boolean;
+  authorised: boolean;
   userId: string | null;
   jwtType: "web" | "anchor" | null;
 }
@@ -96,7 +96,7 @@ function extractJwtSub(token: string): string | null {
 }
 
 async function isAuthorised(req: Request, env: Env): Promise<AuthResult> {
-  const denied: AuthResult = { authorized: false, userId: null, jwtType: null };
+  const denied: AuthResult = { authorised: false, userId: null, jwtType: null };
 
   const userSecret = env.ZANE_WEB_JWT_SECRET?.trim();
   const anchorSecret = env.ZANE_ANCHOR_JWT_SECRET?.trim();
@@ -119,7 +119,7 @@ async function isAuthorised(req: Request, env: Env): Promise<AuthResult> {
     if (ok) {
       const userId = extractJwtSub(provided);
       console.log(`[orbit] auth: web JWT accepted, userId=${userId}`);
-      return { authorized: true, userId, jwtType: "web" };
+      return { authorised: true, userId, jwtType: "web" };
     }
   }
 
@@ -131,7 +131,7 @@ async function isAuthorised(req: Request, env: Env): Promise<AuthResult> {
     if (ok) {
       const userId = extractJwtSub(provided);
       console.log(`[orbit] auth: anchor JWT accepted, userId=${userId}`);
-      return { authorized: true, userId, jwtType: "anchor" };
+      return { authorised: true, userId, jwtType: "anchor" };
     }
   }
 
@@ -265,7 +265,7 @@ export default {
 
     if (req.method === "GET" && url.pathname.startsWith("/threads/") && url.pathname.endsWith("/events")) {
       const authResult = await isAuthorised(req, env);
-      if (!authResult.authorized) {
+      if (!authResult.authorised) {
         console.warn(`[orbit] events auth failed: ${url.pathname}`);
         return new Response("Unauthorised", { status: 401, headers: corsHeaders(origin) });
       }
@@ -279,7 +279,7 @@ export default {
     }
 
     const authResult = await isAuthorised(req, env);
-    if (!authResult.authorized) {
+    if (!authResult.authorised) {
       console.warn(`[orbit] ws auth failed: ${url.pathname}`);
       return new Response("Unauthorised", { status: 401 });
     }
@@ -304,6 +304,13 @@ export default {
   },
 };
 
+interface AnchorMeta {
+  id: string;
+  hostname: string;
+  platform: string;
+  connectedAt: string;
+}
+
 export class OrbitRelay {
   private env: Env;
   private userId: string | null = null;
@@ -311,6 +318,7 @@ export class OrbitRelay {
   // Socket -> subscribed thread IDs
   private clientSockets = new Map<WebSocket, Set<string>>();
   private anchorSockets = new Map<WebSocket, Set<string>>();
+  private anchorMeta = new Map<WebSocket, AnchorMeta>();
 
   // Thread ID -> subscribed sockets (reverse index for fast routing)
   private threadToClients = new Map<string, Set<WebSocket>>();
@@ -352,15 +360,6 @@ export class OrbitRelay {
     const source = role === "client" ? this.clientSockets : this.anchorSockets;
     const direction: Direction = role === "client" ? "client" : "server";
 
-    if (role === "client" && this.anchorSockets.size === 0) {
-      try {
-        socket.close(1013, "Anchor offline");
-      } catch {
-        // ignore
-      }
-      return;
-    }
-
     source.set(socket, new Set());
 
     socket.send(
@@ -380,6 +379,10 @@ export class OrbitRelay {
       const parsed = payloadStr ? parseJsonMessage(payloadStr) : null;
 
       if (this.handleSubscription(socket, role, parsed)) {
+        return;
+      }
+
+      if (this.handleAnchorHello(socket, role, parsed)) {
         return;
       }
 
@@ -420,7 +423,41 @@ export class OrbitRelay {
       return true;
     }
 
+    if (msg.type === "orbit.list-anchors" && role === "client") {
+      const anchors = Array.from(this.anchorMeta.values());
+      try {
+        socket.send(JSON.stringify({ type: "orbit.anchors", anchors }));
+      } catch {
+        // ignore
+      }
+      return true;
+    }
+
     return false;
+  }
+
+  private handleAnchorHello(socket: WebSocket, role: Role, msg: Record<string, unknown> | null): boolean {
+    if (!msg || role !== "anchor" || msg.type !== "anchor.hello") return false;
+
+    const meta: AnchorMeta = {
+      id: crypto.randomUUID(),
+      hostname: typeof msg.hostname === "string" ? msg.hostname : "unknown",
+      platform: typeof msg.platform === "string" ? msg.platform : "unknown",
+      connectedAt: typeof msg.ts === "string" ? msg.ts : new Date().toISOString(),
+    };
+
+    this.anchorMeta.set(socket, meta);
+
+    const notification = JSON.stringify({ type: "orbit.anchor-connected", anchor: meta });
+    for (const clientSocket of this.clientSockets.keys()) {
+      try {
+        clientSocket.send(notification);
+      } catch {
+        // ignore
+      }
+    }
+
+    return true;
   }
 
   private subscribeSocket(socket: WebSocket, role: Role, threadId: string): void {
@@ -476,6 +513,21 @@ export class OrbitRelay {
     }
 
     source.delete(socket);
+
+    if (role === "anchor") {
+      const meta = this.anchorMeta.get(socket);
+      if (meta) {
+        this.anchorMeta.delete(socket);
+        const notification = JSON.stringify({ type: "orbit.anchor-disconnected", anchorId: meta.id });
+        for (const clientSocket of this.clientSockets.keys()) {
+          try {
+            clientSocket.send(notification);
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
   }
 
   private routeMessage(socket: WebSocket, role: Role, data: string | ArrayBuffer | ArrayBufferView, msg: Record<string, unknown> | null): void {

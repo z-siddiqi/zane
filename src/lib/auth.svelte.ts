@@ -6,7 +6,7 @@ import type {
 
 const STORE_KEY = "__zane_auth_store__";
 const STORAGE_KEY = "zane_auth_token";
-const AUTH_BASE_URL = (import.meta.env.VITE_AUTH_URL ?? "").replace(/\/$/, "");
+const AUTH_BASE_URL = (import.meta.env.AUTH_URL ?? "").replace(/\/$/, "");
 
 type AuthStatus = "loading" | "signed_out" | "signed_in" | "needs_setup";
 

@@ -150,6 +150,7 @@ PROJECT: ${projectPath || "Not specified"}`;
 <div class="home stack">
   <AppHeader status={socket.status}>
     {#snippet actions()}
+      <a href="/settings">Settings</a>
       <button type="button" onclick={() => theme.cycle()} title="Theme: {theme.current}">
         {themeIcons[theme.current]}
       </button>

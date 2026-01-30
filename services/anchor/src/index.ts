@@ -1,25 +1,17 @@
+import { hostname } from "node:os";
 import type { WsClient } from "./types";
 
 const PORT = Number(process.env.ANCHOR_PORT ?? 8788);
-const AUTOSTART = (process.env.ANCHOR_AUTOSTART ?? "true").toLowerCase() === "true";
 const ORBIT_URL = process.env.ANCHOR_ORBIT_URL ?? "";
-const ZANE_ANCHOR_JWT_SECRET = process.env.ZANE_ANCHOR_JWT_SECRET ?? "";
 const ANCHOR_APP_CWD = process.env.ANCHOR_APP_CWD ?? process.cwd();
-const USER_ID = process.env.USER_ID;
 const ANCHOR_JWT_TTL_SEC = Number(process.env.ANCHOR_JWT_TTL_SEC ?? 300);
-const ORBIT_RECONNECT_DELAY_MS = 2000;
-const ORBIT_HEARTBEAT_INTERVAL_MS = 30000;
-const ORBIT_HEARTBEAT_TIMEOUT_MS = 10000;
+const AUTH_URL = process.env.AUTH_URL ?? "";
+const FORCE_LOGIN = process.env.ZANE_FORCE_LOGIN === "1";
+const CREDENTIALS_FILE = process.env.ZANE_CREDENTIALS_FILE ?? "";
+const startedAt = Date.now();
 
-if (ORBIT_URL && !ZANE_ANCHOR_JWT_SECRET) {
-  console.error("[anchor] ZANE_ANCHOR_JWT_SECRET is required when ANCHOR_ORBIT_URL is set");
-  process.exit(1);
-}
-
-if (ORBIT_URL && !USER_ID) {
-  console.error("[anchor] USER_ID is required when ANCHOR_ORBIT_URL is set");
-  process.exit(1);
-}
+let ZANE_ANCHOR_JWT_SECRET = "";
+let USER_ID: string | undefined;
 
 const MAX_SUBSCRIBED_THREADS = 1000;
 const clients = new Set<WsClient>();
@@ -285,12 +277,12 @@ function startOrbitHeartbeat(ws: WebSocket): void {
         orbitHeartbeatTimeout = setTimeout(() => {
           console.warn("[anchor] heartbeat timeout");
           ws.close();
-        }, ORBIT_HEARTBEAT_TIMEOUT_MS);
+        }, 10_000);
       } catch {
         ws.close();
       }
     }
-  }, ORBIT_HEARTBEAT_INTERVAL_MS);
+  }, 30_000);
 }
 
 async function connectOrbit(): Promise<void> {
@@ -310,7 +302,12 @@ async function connectOrbit(): Promise<void> {
 
   ws.addEventListener("open", () => {
     orbitConnecting = false;
-    ws.send(JSON.stringify({ type: "anchor.hello", ts: new Date().toISOString() }));
+    ws.send(JSON.stringify({
+      type: "anchor.hello",
+      ts: new Date().toISOString(),
+      hostname: hostname(),
+      platform: process.platform,
+    }));
     console.log("[anchor] connected to orbit");
     startOrbitHeartbeat(ws);
     resubscribeAllThreads();
@@ -358,7 +355,7 @@ async function connectOrbit(): Promise<void> {
     stopOrbitHeartbeat();
     orbitSocket = null;
     orbitConnecting = false;
-    setTimeout(() => void connectOrbit(), ORBIT_RECONNECT_DELAY_MS);
+    setTimeout(() => void connectOrbit(), 2_000);
   });
 
   ws.addEventListener("error", () => {
@@ -393,13 +390,138 @@ async function streamLines(
   if (tail.length > 0) onLine(tail);
 }
 
+interface Credentials {
+  anchorJwtSecret: string;
+  userId: string;
+}
+
+async function loadCredentials(): Promise<Credentials | null> {
+  if (!CREDENTIALS_FILE) return null;
+  try {
+    const text = await Bun.file(CREDENTIALS_FILE).text();
+    const data = JSON.parse(text) as Partial<Credentials>;
+    if (data.anchorJwtSecret && data.userId) {
+      return { anchorJwtSecret: data.anchorJwtSecret, userId: data.userId };
+    }
+  } catch {
+    // File doesn't exist or is invalid
+  }
+  return null;
+}
+
+async function saveCredentials(creds: Credentials): Promise<void> {
+  if (!CREDENTIALS_FILE) return;
+  try {
+    await Bun.write(CREDENTIALS_FILE, JSON.stringify(creds, null, 2) + "\n");
+    const { chmod } = await import("node:fs/promises");
+    await chmod(CREDENTIALS_FILE, 0o600);
+  } catch (err) {
+    console.warn("[anchor] could not save credentials", err);
+  }
+}
+
+async function deviceLogin(): Promise<boolean> {
+  if (!AUTH_URL) {
+    console.error("[anchor] AUTH_URL is required for device login");
+    return false;
+  }
+
+  console.log("\n  Sign in to connect to Orbit:\n");
+
+  try {
+    const codeRes = await fetch(`${AUTH_URL}/auth/device/code`, { method: "POST" });
+    if (!codeRes.ok) {
+      console.error("[anchor] failed to request device code");
+      return false;
+    }
+
+    const codeData = (await codeRes.json()) as {
+      deviceCode: string;
+      userCode: string;
+      verificationUrl: string;
+      expiresIn: number;
+      interval: number;
+    };
+
+    console.log(`    ${codeData.verificationUrl}\n`);
+    console.log(`  Enter code: \x1b[1m${codeData.userCode}\x1b[0m\n`);
+
+    // Try to open browser
+    try {
+      Bun.spawn(["open", codeData.verificationUrl]);
+    } catch {
+      // Ignore — user can open manually
+    }
+
+    console.log("  Waiting for authorisation...");
+
+    const deadline = Date.now() + codeData.expiresIn * 1000;
+    const interval = codeData.interval * 1000;
+
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, interval));
+
+      const tokenRes = await fetch(`${AUTH_URL}/auth/device/token`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ deviceCode: codeData.deviceCode }),
+      });
+
+      if (!tokenRes.ok) {
+        const errBody = await tokenRes.text().catch(() => "");
+        console.error(`  [anchor] poll error (${tokenRes.status}): ${errBody}`);
+        continue;
+      }
+
+      const tokenData = (await tokenRes.json()) as {
+        status: "pending" | "authorised" | "expired";
+        userId?: string;
+        anchorJwtSecret?: string;
+      };
+
+      if (tokenData.status === "pending") continue;
+
+      if (tokenData.status === "authorised" && tokenData.userId && tokenData.anchorJwtSecret) {
+        ZANE_ANCHOR_JWT_SECRET = tokenData.anchorJwtSecret;
+        USER_ID = tokenData.userId;
+
+        await saveCredentials({ anchorJwtSecret: ZANE_ANCHOR_JWT_SECRET, userId: USER_ID });
+
+        console.log("  \x1b[32mAuthorised!\x1b[0m Credentials saved.\n");
+        return true;
+      }
+
+      // expired
+      console.error("  Code expired. Run 'zane login' to try again.");
+      return false;
+    }
+
+    console.error("  Timed out. Run 'zane login' to try again.");
+    return false;
+  } catch (err) {
+    console.error("[anchor] device login failed", err);
+    return false;
+  }
+}
+
 const server = Bun.serve({
   port: PORT,
   fetch(req, server) {
     const url = new URL(req.url);
 
     if (req.method === "GET" && url.pathname === "/health") {
-      return new Response(null, { status: 200 });
+      const orbitStatus = !ORBIT_URL
+        ? "disabled"
+        : orbitSocket && orbitSocket.readyState === WebSocket.OPEN
+          ? "connected"
+          : "disconnected";
+      return Response.json({
+        status: "ok",
+        appServer: appServer !== null,
+        orbit: orbitStatus,
+        uptime: Math.floor((Date.now() - startedAt) / 1000),
+        port: PORT,
+      });
     }
 
     if (url.pathname === "/ws/anchor" || url.pathname === "/ws") {
@@ -413,7 +535,12 @@ const server = Bun.serve({
     open(ws) {
       clients.add(ws as WsClient);
       ensureAppServer();
-      ws.send(JSON.stringify({ type: "anchor.hello", ts: new Date().toISOString() }));
+      ws.send(JSON.stringify({
+        type: "anchor.hello",
+        ts: new Date().toISOString(),
+        hostname: hostname(),
+        platform: process.platform,
+      }));
     },
     message(_ws, message) {
       ensureAppServer();
@@ -430,11 +557,38 @@ const server = Bun.serve({
   },
 });
 
-if (AUTOSTART) {
-  ensureAppServer();
+ensureAppServer();
+
+async function startup() {
+  const saved = await loadCredentials();
+  if (saved) {
+    ZANE_ANCHOR_JWT_SECRET = saved.anchorJwtSecret;
+    USER_ID = saved.userId;
+  }
+
+  const needsLogin = ORBIT_URL && (!ZANE_ANCHOR_JWT_SECRET || !USER_ID || FORCE_LOGIN);
+
+  console.log(`\nZane Anchor`);
+  console.log(`  Local:     http://localhost:${server.port}`);
+  console.log(`  WebSocket: ws://localhost:${server.port}/ws`);
+
+  if (needsLogin) {
+    const ok = await deviceLogin();
+    if (!ok) {
+      console.log(`  Orbit:     not connected (login required)`);
+      console.log();
+      return;
+    }
+  }
+
+  if (ORBIT_URL) {
+    console.log(`  Orbit:     ${ORBIT_URL}`);
+  } else {
+    console.log(`  Orbit:     disabled (local-only mode)`);
+  }
+  console.log();
+
+  void connectOrbit();
 }
 
-void connectOrbit();
-
-console.log(`[anchor] listening on http://localhost:${server.port}`);
-console.log(`[anchor] websocket: ws://localhost:${server.port}/ws`);
+void startup();
