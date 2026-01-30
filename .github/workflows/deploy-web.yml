@@ -22,7 +22,7 @@ jobs:
       - name: Build
         run: bun run build
         env:
-          VITE_AUTH_URL: ${{ secrets.VITE_AUTH_URL }}
+          AUTH_URL: ${{ secrets.AUTH_URL }}
       - name: Deploy
         run: bunx wrangler pages deploy dist
         env:

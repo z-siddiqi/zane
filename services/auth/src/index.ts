@@ -11,7 +11,7 @@ import {
   verifyRegistrationResponse,
 } from "@simplewebauthn/server";
 
-import type { ChallengeRecord, StoredCredential, StoredUser } from "./types";
+import type { ChallengeRecord, DeviceCodeRecord, StoredCredential, StoredUser } from "./types";
 import { base64UrlDecode, base64UrlEncode, corsHeaders, getRpId, isAllowedOrigin } from "./utils";
 import { createSession, verifySession } from "./session";
 import {
@@ -85,6 +85,58 @@ export class PasskeyChallengeStore extends DurableObject<CloudflareEnv> {
         return Response.json({ record: null });
       }
       await this.ctx.storage.delete(body.key);
+      return Response.json({ record });
+    }
+
+    // ── Device code flow ──────────────────────────
+    if (url.pathname === "/device/set") {
+      const body = (await req.json()) as { record: DeviceCodeRecord };
+      if (!body?.record) return new Response("Bad request", { status: 400 });
+      const r = body.record;
+      await this.ctx.storage.put(`device:user:${r.userCode}`, r);
+      await this.ctx.storage.put(`device:poll:${r.deviceCode}`, r);
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === "/device/poll") {
+      const body = (await req.json()) as { deviceCode: string };
+      if (!body?.deviceCode) return new Response("Bad request", { status: 400 });
+      const record = await this.ctx.storage.get<DeviceCodeRecord>(`device:poll:${body.deviceCode}`);
+      if (!record || Date.now() > record.expiresAt) {
+        if (record) {
+          await this.ctx.storage.delete(`device:poll:${body.deviceCode}`);
+          await this.ctx.storage.delete(`device:user:${record.userCode}`);
+        }
+        return Response.json({ record: null });
+      }
+      return Response.json({ record });
+    }
+
+    if (url.pathname === "/device/authorise") {
+      const body = (await req.json()) as { userCode: string; userId: string };
+      if (!body?.userCode || !body?.userId) return new Response("Bad request", { status: 400 });
+      const record = await this.ctx.storage.get<DeviceCodeRecord>(`device:user:${body.userCode}`);
+      if (!record || Date.now() > record.expiresAt) {
+        if (record) {
+          await this.ctx.storage.delete(`device:user:${body.userCode}`);
+          await this.ctx.storage.delete(`device:poll:${record.deviceCode}`);
+        }
+        return Response.json({ ok: false, error: "expired" });
+      }
+      const updated: DeviceCodeRecord = { ...record, status: "authorised", userId: body.userId };
+      await this.ctx.storage.put(`device:user:${body.userCode}`, updated);
+      await this.ctx.storage.put(`device:poll:${record.deviceCode}`, updated);
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === "/device/consume") {
+      const body = (await req.json()) as { deviceCode: string };
+      if (!body?.deviceCode) return new Response("Bad request", { status: 400 });
+      const record = await this.ctx.storage.get<DeviceCodeRecord>(`device:poll:${body.deviceCode}`);
+      if (!record) return Response.json({ record: null });
+      if (record.status !== "authorised") return Response.json({ record: null });
+      await this.ctx.storage.delete(`device:poll:${body.deviceCode}`);
+      await this.ctx.storage.delete(`device:user:${record.userCode}`);
       return Response.json({ record });
     }
 
@@ -406,6 +458,138 @@ async function handleLoginVerify(req: Request, env: CloudflareEnv): Promise<Resp
   );
 }
 
+const DEVICE_CODE_TTL_MS = 10 * 60 * 1000;
+const DEVICE_CODE_POLL_INTERVAL = 5;
+
+function generateUserCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  let code = "";
+  for (let i = 0; i < 8; i++) {
+    code += chars[bytes[i] % chars.length];
+  }
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
+}
+
+function generateDeviceCode(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return base64UrlEncode(bytes);
+}
+
+function getDoStub(env: CloudflareEnv) {
+  const id = env.PASSKEY_CHALLENGE_DO.idFromName("default");
+  return env.PASSKEY_CHALLENGE_DO.get(id);
+}
+
+async function handleDeviceCode(req: Request, env: CloudflareEnv): Promise<Response> {
+  const deviceCode = generateDeviceCode();
+  const userCode = generateUserCode();
+  const record: DeviceCodeRecord = {
+    deviceCode,
+    userCode,
+    status: "pending",
+    expiresAt: Date.now() + DEVICE_CODE_TTL_MS,
+  };
+
+  const stub = getDoStub(env);
+  const res = await stub.fetch("https://do/device/set", {
+    method: "POST",
+    body: JSON.stringify({ record }),
+  });
+  if (!res.ok) {
+    return Response.json({ error: "Failed to create device code." }, { status: 500, headers: corsHeaders(req, env) });
+  }
+
+  const origin = env.PASSKEY_ORIGIN ?? "";
+  return Response.json(
+    {
+      deviceCode,
+      userCode,
+      verificationUrl: `${origin}/device`,
+      expiresIn: Math.floor(DEVICE_CODE_TTL_MS / 1000),
+      interval: DEVICE_CODE_POLL_INTERVAL,
+    },
+    { status: 200, headers: corsHeaders(req, env) }
+  );
+}
+
+async function handleDeviceToken(req: Request, env: CloudflareEnv): Promise<Response> {
+  const body = (await req.json()) as { deviceCode?: string };
+  if (!body?.deviceCode) {
+    return Response.json({ error: "deviceCode is required." }, { status: 400, headers: corsHeaders(req, env) });
+  }
+
+  const stub = getDoStub(env);
+
+  // First check status without consuming
+  const pollRes = await stub.fetch("https://do/device/poll", {
+    method: "POST",
+    body: JSON.stringify({ deviceCode: body.deviceCode }),
+  });
+  const pollData = (await pollRes.json()) as { record: DeviceCodeRecord | null };
+
+  if (!pollData.record) {
+    return Response.json({ status: "expired" }, { status: 200, headers: corsHeaders(req, env) });
+  }
+
+  if (pollData.record.status === "pending") {
+    return Response.json({ status: "pending" }, { status: 200, headers: corsHeaders(req, env) });
+  }
+
+  // Check secret exists before consuming (so record survives retries if misconfigured)
+  const anchorSecret = env.ZANE_ANCHOR_JWT_SECRET?.trim();
+  if (!anchorSecret) {
+    return Response.json({ error: "Anchor secret not configured on auth service." }, { status: 503, headers: corsHeaders(req, env) });
+  }
+
+  const consumeRes = await stub.fetch("https://do/device/consume", {
+    method: "POST",
+    body: JSON.stringify({ deviceCode: body.deviceCode }),
+  });
+  const consumeData = (await consumeRes.json()) as { record: DeviceCodeRecord | null };
+
+  if (!consumeData.record) {
+    return Response.json({ status: "expired" }, { status: 200, headers: corsHeaders(req, env) });
+  }
+
+  return Response.json(
+    {
+      status: "authorised",
+      userId: consumeData.record.userId,
+      anchorJwtSecret: anchorSecret,
+    },
+    { status: 200, headers: corsHeaders(req, env) }
+  );
+}
+
+async function handleDeviceAuthorise(req: Request, env: CloudflareEnv): Promise<Response> {
+  const session = await verifySession(req, env);
+  if (!session) {
+    return Response.json({ error: "Authentication required." }, { status: 401, headers: corsHeaders(req, env) });
+  }
+
+  const body = (await req.json()) as { userCode?: string };
+  if (!body?.userCode) {
+    return Response.json({ error: "userCode is required." }, { status: 400, headers: corsHeaders(req, env) });
+  }
+
+  const stub = getDoStub(env);
+  const res = await stub.fetch("https://do/device/authorise", {
+    method: "POST",
+    body: JSON.stringify({ userCode: body.userCode.toUpperCase().trim(), userId: session.sub }),
+  });
+  const data = (await res.json()) as { ok: boolean; error?: string };
+
+  if (!data.ok) {
+    return Response.json(
+      { error: data.error === "expired" ? "Code expired or not found." : "Authorisation failed." },
+      { status: 400, headers: corsHeaders(req, env) }
+    );
+  }
+
+  return Response.json({ ok: true }, { status: 200, headers: corsHeaders(req, env) });
+}
+
 async function handleLogout(req: Request, env: CloudflareEnv): Promise<Response> {
   const session = await verifySession(req, env);
   if (session) {
@@ -449,6 +633,18 @@ export default class AuthService extends WorkerEntrypoint<CloudflareEnv> {
 
     if (url.pathname === "/auth/logout" && req.method === "POST") {
       return await handleLogout(req, env);
+    }
+
+    if (url.pathname === "/auth/device/code" && req.method === "POST") {
+      return await handleDeviceCode(req, env);
+    }
+
+    if (url.pathname === "/auth/device/token" && req.method === "POST") {
+      return await handleDeviceToken(req, env);
+    }
+
+    if (url.pathname === "/auth/device/authorise" && req.method === "POST") {
+      return await handleDeviceAuthorise(req, env);
     }
 
     return new Response("Not found", { status: 404, headers: corsHeaders(req, env) });

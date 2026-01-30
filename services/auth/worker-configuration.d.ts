@@ -11,6 +11,7 @@ declare namespace Cloudflare {
     PASSKEY_ORIGIN?: string;
     PASSKEY_SETUP_TOKEN?: string;
     ZANE_WEB_JWT_SECRET?: string;
+    ZANE_ANCHOR_JWT_SECRET?: string;
   }
 }
 interface CloudflareEnv extends Cloudflare.Env {}
