@@ -21,7 +21,7 @@
 
   const prefixConfig = $derived.by(() => {
     if (message.role === "user") {
-      return { prefix: "▌", color: "var(--cli-prefix-user)", bgClass: "user-bg" };
+      return { prefix: ">", color: "var(--cli-prefix-agent)", bgClass: "user-bg" };
     }
     if (message.role === "assistant") {
       return { prefix: "•", color: "var(--cli-prefix-agent)", bgClass: "" };
@@ -85,9 +85,11 @@
 
   .message-block.user-bg {
     background: var(--cli-bg-user);
-    border-left: 2px solid var(--cli-prefix-user);
-    padding-left: calc(var(--space-md) - 2px);
+    border-left: 0;
+    box-shadow: none;
+    padding-left: var(--space-md);
   }
+
 
   .message-line {
     --row-gap: var(--space-sm);

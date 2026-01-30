@@ -47,7 +47,7 @@
   /* CLI Terminal Colors - Light */
   --cli-bg: #fafafa;
   --cli-bg-elevated: #ffffff;
-  --cli-bg-user: rgba(37, 99, 235, 0.08);
+  --cli-bg-user: rgba(22, 163, 74, 0.12);
   --cli-text: #1f2937;
   --cli-text-dim: #4b5563;
   --cli-text-muted: #9ca3af;
@@ -118,7 +118,7 @@
     /* CLI Terminal Colors - Dark */
     --cli-bg: #1a1a1a;
     --cli-bg-elevated: #242424;
-    --cli-bg-user: rgba(96, 165, 250, 0.15);
+    --cli-bg-user: rgba(74, 222, 128, 0.18);
     --cli-text: #e5e7eb;
     --cli-text-dim: #9ca3af;
     --cli-text-muted: #6b7280;
@@ -186,7 +186,7 @@
   /* CLI Terminal Colors - Dark */
   --cli-bg: #1a1a1a;
   --cli-bg-elevated: #242424;
-  --cli-bg-user: rgba(96, 165, 250, 0.15);
+  --cli-bg-user: rgba(74, 222, 128, 0.18);
   --cli-text: #e5e7eb;
   --cli-text-dim: #9ca3af;
   --cli-text-muted: #6b7280;
