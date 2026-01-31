@@ -31,6 +31,7 @@ class MessagesStore {
   // Turn state
   #currentTurnId = $state<string | null>(null);
   #currentTurnStatus = $state<TurnStatus | null>(null);
+  #interruptPending = false;
   #currentPlan = $state<PlanStep[]>([]);
   #planExplanation = $state<string | null>(null);
   #statusDetail = $state<string | null>(null);
@@ -52,6 +53,27 @@ class MessagesStore {
   }
   get streamingReasoningText() {
     return this.#streamingReasoningText;
+  }
+
+  interrupt(threadId: string): { success: boolean; error?: string } {
+    const turnId = this.#currentTurnId;
+    if (!turnId || (this.#currentTurnStatus ?? "").toLowerCase() !== "inprogress") {
+      return { success: true };
+    }
+    if (this.#interruptPending) {
+      return { success: true };
+    }
+
+    const result = socket.send({
+      method: "turn/interrupt",
+      id: Date.now(),
+      params: { threadId, turnId },
+    });
+
+    if (result.success) {
+      this.#interruptPending = true;
+    }
+    return result;
   }
 
   onTurnComplete(threadId: string, callback: TurnCompleteCallback): () => void {
@@ -477,6 +499,7 @@ class MessagesStore {
       if (turn) {
         this.#currentTurnId = turn.id;
         this.#currentTurnStatus = (turn.status as TurnStatus) || "InProgress";
+        this.#interruptPending = false;
         this.#currentPlan = [];
         this.#planExplanation = null;
         this.#statusDetail = null;
@@ -490,6 +513,7 @@ class MessagesStore {
       const turn = params.turn as { id: string; status?: string } | undefined;
       if (turn) {
         this.#currentTurnStatus = (turn.status as TurnStatus) || "Completed";
+        this.#interruptPending = false;
         this.#statusDetail = null;
 
         // Fire turn complete callback if registered

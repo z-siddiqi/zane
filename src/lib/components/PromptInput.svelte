@@ -7,6 +7,7 @@
     modelOptions?: ModelOption[];
     modelsLoading?: boolean;
     disabled?: boolean;
+    onStop?: () => void;
     onSubmit: (input: string) => void;
     onModelChange: (model: string) => void;
     onReasoningChange: (effort: ReasoningEffort) => void;
@@ -18,6 +19,7 @@
     modelOptions = [],
     modelsLoading = false,
     disabled = false,
+    onStop,
     onSubmit,
     onModelChange,
     onReasoningChange,
@@ -186,18 +188,26 @@
         </div>
       </div>
 
-      <button type="submit" class="submit-btn row" disabled={!canSubmit}>
-        {#if disabled}
-          <svg class="spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+      {#if disabled && onStop}
+        <button type="button" class="stop-btn row" onclick={onStop} title="Stop">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="6" width="12" height="12" rx="1"/>
           </svg>
-        {:else}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="m6 17 5-5-5-5"/>
-            <path d="m13 17 5-5-5-5"/>
-          </svg>
-        {/if}
-      </button>
+        </button>
+      {:else}
+        <button type="submit" class="submit-btn row" disabled={!canSubmit}>
+          {#if disabled}
+            <svg class="spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+            </svg>
+          {:else}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m6 17 5-5-5-5"/>
+              <path d="m13 17 5-5-5-5"/>
+            </svg>
+          {/if}
+        </button>
+      {/if}
     </div>
   </div>
 </form>
@@ -384,6 +394,29 @@
   .submit-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+
+  .stop-btn {
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    background: var(--cli-error);
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: opacity var(--transition-fast);
+    --row-gap: 0;
+  }
+
+  .stop-btn svg {
+    width: 1rem;
+    height: 1rem;
+    color: var(--cli-bg);
+  }
+
+  .stop-btn:hover {
+    opacity: 0.85;
   }
 
   .spinner {

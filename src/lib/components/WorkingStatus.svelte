@@ -40,11 +40,6 @@
   <div class="status-line row">
     <ShimmerDot color="var(--cli-prefix-agent)" />
     <span class="label">Working</span>
-    <span class="progress-bar">
-      <span class="bar-track">
-        <span class="bar-fill"></span>
-      </span>
-    </span>
     {#if currentStep}
       <span class="detail">{currentStep}</span>
     {/if}
@@ -87,36 +82,6 @@
 
   .label {
     font-weight: 500;
-  }
-
-  .progress-bar {
-    width: var(--size-progress-width);
-  }
-
-  .bar-track {
-    display: block;
-    height: var(--size-progress-height);
-    background: var(--cli-border);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-
-  .bar-fill {
-    display: block;
-    height: 100%;
-    width: 30%;
-    background: var(--cli-prefix-agent);
-    border-radius: 2px;
-    animation: progress-sweep 1.5s ease-in-out infinite;
-  }
-
-  @keyframes progress-sweep {
-    0% {
-      transform: translateX(-100%);
-    }
-    100% {
-      transform: translateX(400%);
-    }
   }
 
   .detail {

@@ -51,9 +51,9 @@
     });
 
     $effect(() => {
-        if (messages.turnStatus === "InProgress" && !turnStartTime) {
+        if ((messages.turnStatus ?? "").toLowerCase() === "inprogress" && !turnStartTime) {
             turnStartTime = Date.now();
-        } else if (messages.turnStatus !== "InProgress") {
+        } else if ((messages.turnStatus ?? "").toLowerCase() !== "inprogress") {
             turnStartTime = undefined;
         }
     });
@@ -88,6 +88,14 @@
 
         if (!result.success) {
             sendError = result.error ?? "Failed to send message";
+        }
+    }
+
+    function handleStop() {
+        if (!threadId) return;
+        const result = messages.interrupt(threadId);
+        if (!result.success) {
+            sendError = result.error ?? "Failed to stop turn";
         }
     }
 
@@ -145,7 +153,7 @@
                 </div>
             {/if}
 
-            {#if messages.turnStatus === "InProgress" && !messages.isReasoningStreaming}
+            {#if (messages.turnStatus ?? "").toLowerCase() === "inprogress" && !messages.isReasoningStreaming}
                 <WorkingStatus
                     detail={messages.statusDetail ?? messages.planExplanation}
                     plan={messages.plan}
@@ -174,7 +182,8 @@
         {reasoningEffort}
         modelOptions={models.options}
         modelsLoading={models.status === "loading"}
-        disabled={messages.turnStatus === "InProgress" || !socket.isHealthy}
+        disabled={(messages.turnStatus ?? "").toLowerCase() === "inprogress" || !socket.isHealthy}
+        onStop={(messages.turnStatus ?? "").toLowerCase() === "inprogress" ? handleStop : undefined}
         onSubmit={handleSubmit}
         onModelChange={(v) => model = v}
         onReasoningChange={(v) => reasoningEffort = v}
