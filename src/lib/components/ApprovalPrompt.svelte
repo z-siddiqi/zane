@@ -14,8 +14,8 @@
 
   const options = [
     { key: "Y", label: "Yes, proceed", action: () => onApprove(false) },
-    { key: "A", label: "Yes, always for this session", action: () => onApprove(true) },
-    { key: "N", label: "No, decline", action: () => onDecline() },
+    { key: "A", label: "Always for session", action: () => onApprove(true) },
+    { key: "N", label: "Decline", action: () => onDecline() },
     { key: "Esc", label: "Cancel turn", action: () => onCancel() },
   ];
 
@@ -27,9 +27,9 @@
   };
 
   const statusLabels: Record<string, { text: string; color: string }> = {
-    approved: { text: "APPROVED", color: "var(--cli-success)" },
-    declined: { text: "DECLINED", color: "var(--cli-error)" },
-    cancelled: { text: "CANCELLED", color: "var(--cli-text-muted)" },
+    approved: { text: "Approved", color: "var(--cli-success)" },
+    declined: { text: "Declined", color: "var(--cli-error)" },
+    cancelled: { text: "Cancelled", color: "var(--cli-text-muted)" },
   };
 
   function handleOptionClick(index: number) {
@@ -71,168 +71,172 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="approval-prompt" class:resolved={approval.status !== "pending"}>
-  <div class="border-top">┌─ Approval Required ─{"─".repeat(30)}┐</div>
+<div class="approval-card" class:resolved={approval.status !== "pending"}>
+  <div class="card-header">
+    <span class="header-label">Approval Required</span>
+    <span class="header-type">{actionLabels[approval.type]}</span>
+  </div>
 
-  <div class="content">
-    <div class="line row">
-      <span class="border">│</span>
-      <span class="action-type">{actionLabels[approval.type]}</span>
-    </div>
-
+  <div class="card-body">
     {#if approval.command}
-      <div class="line command row">
-        <span class="border">│</span>
+      <div class="command-block">
         <span class="prompt">$</span>
         <span class="command-text">{approval.command}</span>
       </div>
     {/if}
 
     {#if approval.filePath}
-      <div class="line row">
-        <span class="border">│</span>
-        <span class="file-path">{approval.filePath}</span>
-      </div>
+      <div class="file-path">{approval.filePath}</div>
     {/if}
 
     {#if approval.description && approval.description !== approval.command}
-      <div class="line description row">
-        <span class="border">│</span>
-        <span class="desc-text">{approval.description}</span>
-      </div>
+      <div class="description">{approval.description}</div>
     {/if}
+  </div>
 
-    <div class="line empty row"><span class="border">│</span></div>
-
+  <div class="card-actions">
     {#if approval.status === "pending"}
       {#each options as option, i}
         <button
           type="button"
-          class="line option row"
-          class:selected={i === selectedIndex}
+          class="option-btn"
+          class:focused={i === selectedIndex}
           onclick={() => handleOptionClick(i)}
         >
-          <span class="border">│</span>
-          <span class="selector">{i === selectedIndex ? "›" : " "}</span>
-          <span class="key">[{option.key}]</span>
+          <span class="option-key">{option.key}</span>
           <span class="option-label">{option.label}</span>
         </button>
       {/each}
     {:else}
-      <div class="line status row">
-        <span class="border">│</span>
-        <span class="status-text" style:color={statusLabels[approval.status].color}>
-          {statusLabels[approval.status].text}
-        </span>
+      <div class="status-badge" style:color={statusLabels[approval.status].color}>
+        {statusLabels[approval.status].text}
       </div>
     {/if}
   </div>
-
-  <div class="border-bottom">└{"─".repeat(50)}┘</div>
 </div>
 
 <style>
-  .approval-prompt {
+  .approval-card {
+    margin: var(--space-xs) var(--space-md);
+    border: 1px solid var(--cli-border);
+    border-radius: var(--radius-md);
+    background: var(--cli-bg-elevated);
     font-family: var(--font-mono);
     font-size: var(--text-sm);
-    color: var(--cli-text);
-    padding: var(--space-sm) var(--space-md);
-  }
-
-  .approval-prompt.resolved {
-    opacity: 0.6;
-  }
-
-  .border-top,
-  .border-bottom {
-    color: var(--cli-prefix-tool);
-    white-space: pre;
     overflow: hidden;
   }
 
-  .content {
-    padding: var(--space-xs) 0;
+  .approval-card.resolved {
+    opacity: 0.6;
   }
 
-  .line {
-    --row-gap: var(--space-sm);
-    align-items: baseline;
-    padding: 1px 0;
-    white-space: nowrap;
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-sm) var(--space-md);
+    border-bottom: 1px solid var(--cli-border);
   }
 
-  .line.empty {
-    height: var(--text-sm);
-  }
-
-  .border {
+  .header-label {
     color: var(--cli-prefix-tool);
-    flex-shrink: 0;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
-  .action-type {
-    color: var(--cli-text);
-    font-weight: 500;
+  .header-type {
+    color: var(--cli-text-muted);
+    font-size: var(--text-xs);
   }
 
-  .line.command {
-    margin: var(--space-xs) 0;
+  .card-body {
+    padding: var(--space-sm) var(--space-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
+
+  .command-block {
+    display: flex;
+    gap: var(--space-sm);
+    padding: var(--space-xs) var(--space-sm);
+    background: var(--cli-bg);
+    border-radius: var(--radius-sm);
   }
 
   .prompt {
     color: var(--cli-prefix-reasoning);
     font-weight: 600;
+    flex-shrink: 0;
   }
 
   .command-text {
     color: var(--cli-text);
+    word-break: break-all;
   }
 
   .file-path {
     color: var(--cli-prefix-user);
+    font-size: var(--text-xs);
   }
 
-  .line.description .desc-text {
+  .description {
     color: var(--cli-text-dim);
-    font-style: italic;
+    font-size: var(--text-xs);
   }
 
-  .line.option {
+  .card-actions {
+    display: flex;
+    gap: var(--space-xs);
+    padding: var(--space-sm) var(--space-md);
+    border-top: 1px solid var(--cli-border);
+    flex-wrap: wrap;
+  }
+
+  .option-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    padding: var(--space-xs) var(--space-sm);
     background: transparent;
-    border: none;
+    border: 1px solid var(--cli-border);
+    border-radius: var(--radius-sm);
+    color: var(--cli-text);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
     cursor: pointer;
-    text-align: left;
-    width: 100%;
+    transition: all var(--transition-fast);
   }
 
-  .line.option:hover {
-    background: var(--cli-selection);
+  .option-btn:hover {
+    border-color: var(--cli-text-muted);
+    background: var(--cli-bg-hover);
   }
 
-  .line.option.selected {
-    background: var(--cli-selection);
+  .option-btn.focused {
+    border-color: var(--cli-prefix-agent);
+    background: color-mix(in srgb, var(--cli-prefix-agent) 10%, transparent);
   }
 
-  .selector {
+  .option-btn.focused .option-label {
     color: var(--cli-prefix-agent);
-    font-weight: 600;
-    width: 1ch;
   }
 
-  .key {
+  .option-key {
     color: var(--cli-text-muted);
-    width: 5ch;
+    font-size: var(--text-xs);
+    min-width: 1.5ch;
+    text-align: center;
   }
 
   .option-label {
     color: var(--cli-text);
   }
 
-  .line.option.selected .option-label {
-    color: var(--cli-prefix-agent);
-  }
-
-  .status-text {
+  .status-badge {
+    font-size: var(--text-xs);
     font-weight: 600;
   }
 </style>

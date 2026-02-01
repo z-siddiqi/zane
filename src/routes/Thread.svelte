@@ -1,5 +1,5 @@
 <script lang="ts">
-    import type { ReasoningEffort, SandboxMode } from "../lib/types";
+    import type { ModeKind, ReasoningEffort, SandboxMode } from "../lib/types";
     import { route } from "../router";
     import { socket } from "../lib/socket.svelte";
     import { threads } from "../lib/threads.svelte";
@@ -10,6 +10,8 @@
     import AppHeader from "../lib/components/AppHeader.svelte";
     import MessageBlock from "../lib/components/MessageBlock.svelte";
     import ApprovalPrompt from "../lib/components/ApprovalPrompt.svelte";
+    import UserInputPrompt from "../lib/components/UserInputPrompt.svelte";
+    import PlanCard from "../lib/components/PlanCard.svelte";
     import WorkingStatus from "../lib/components/WorkingStatus.svelte";
     import Reasoning from "../lib/components/Reasoning.svelte";
     import PromptInput from "../lib/components/PromptInput.svelte";
@@ -19,6 +21,9 @@
     let model = $state("");
     let reasoningEffort = $state<ReasoningEffort>("medium");
     let sandbox = $state<SandboxMode>("workspace-write");
+    let mode = $state<ModeKind>("code");
+    let modeUserOverride = false;
+    let trackedPlanId: string | null = null;
     let container: HTMLDivElement | undefined;
     let turnStartTime = $state<number | undefined>(undefined);
 
@@ -74,10 +79,23 @@
             params.model = model.trim();
         }
         if (reasoningEffort) {
-            params.reasoningEffort = reasoningEffort;
+            params.effort = reasoningEffort;
         }
         if (sandbox) {
-            params.sandbox = sandbox;
+            const sandboxTypeMap: Record<SandboxMode, string> = {
+                "read-only": "readOnly",
+                "workspace-write": "workspaceWrite",
+                "danger-full-access": "dangerFullAccess",
+            };
+            params.sandboxPolicy = { type: sandboxTypeMap[sandbox] };
+        }
+
+        if (model.trim()) {
+            params.collaborationMode = threads.resolveCollaborationMode(
+                mode,
+                model.trim(),
+                reasoningEffort,
+            );
         }
 
         const result = socket.send({
@@ -98,6 +116,41 @@
             sendError = result.error ?? "Failed to stop turn";
         }
     }
+
+    function handlePlanApprove(messageId: string) {
+        messages.approvePlan(messageId);
+        modeUserOverride = true;
+        mode = "code";
+        handleSubmit("Approved. Proceed with implementation.");
+    }
+
+    const lastPlanId = $derived.by(() => {
+        const msgs = messages.current;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+            if (msgs[i].kind === "plan") return msgs[i].id;
+        }
+        return null;
+    });
+
+    // Auto-sync mode to "plan" when the thread has an active plan
+    $effect(() => {
+        if (!lastPlanId) return;
+        // New plan arrived — reset user override
+        if (lastPlanId !== trackedPlanId) {
+            trackedPlanId = lastPlanId;
+            modeUserOverride = false;
+        }
+        if (modeUserOverride) return;
+        const msgs = messages.current;
+        const planIdx = msgs.findIndex((m) => m.id === lastPlanId);
+        // If nothing meaningful came after the plan, stay in plan mode
+        const hasFollowUp = msgs.slice(planIdx + 1).some(
+            (m) => m.role === "user" || (m.role === "assistant" && m.kind !== "reasoning")
+        );
+        if (!hasFollowUp) {
+            mode = "plan";
+        }
+    });
 
     $effect(() => {
         if (socket.status === "connected") {
@@ -137,6 +190,18 @@
                         onApprove={(forSession) => messages.approve(message.approval!.id, forSession)}
                         onDecline={() => messages.decline(message.approval!.id)}
                         onCancel={() => messages.cancel(message.approval!.id)}
+                    />
+                {:else if message.kind === "user-input-request" && message.userInputRequest}
+                    <UserInputPrompt
+                        request={message.userInputRequest}
+                        onSubmit={(answers) => messages.respondToUserInput(message.id, answers)}
+                    />
+                {:else if message.kind === "plan"}
+                    <PlanCard
+                        {message}
+                        disabled={(messages.turnStatus ?? "").toLowerCase() === "inprogress" || !socket.isHealthy}
+                        latest={message.id === lastPlanId}
+                        onApprove={() => handlePlanApprove(message.id)}
                     />
                 {:else}
                     <MessageBlock {message} />
@@ -180,6 +245,7 @@
     <PromptInput
         {model}
         {reasoningEffort}
+        {mode}
         modelOptions={models.options}
         modelsLoading={models.status === "loading"}
         disabled={(messages.turnStatus ?? "").toLowerCase() === "inprogress" || !socket.isHealthy}
@@ -187,6 +253,7 @@
         onSubmit={handleSubmit}
         onModelChange={(v) => model = v}
         onReasoningChange={(v) => reasoningEffort = v}
+        onModeChange={(v) => { modeUserOverride = true; mode = v; }}
     />
 </div>
 

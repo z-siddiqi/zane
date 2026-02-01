@@ -39,7 +39,11 @@ export type MessageKind =
   | "image"
   | "terminal"
   | "wait"
-  | "approval-request";
+  | "approval-request"
+  | "user-input-request"
+  | "plan"
+  | "collab"
+  | "compaction";
 
 export interface MessageMetadata {
   filePath?: string;
@@ -60,6 +64,26 @@ export interface ApprovalRequest {
   status: "pending" | "approved" | "declined" | "cancelled";
 }
 
+export interface UserInputOption {
+  label: string;
+  description: string;
+}
+
+export interface UserInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  isOther?: boolean;
+  isSecret?: boolean;
+  options?: UserInputOption[];
+}
+
+export interface UserInputRequest {
+  rpcId: number;
+  questions: UserInputQuestion[];
+  status: "pending" | "answered";
+}
+
 export interface Message {
   id: string;
   role: MessageRole;
@@ -69,6 +93,8 @@ export interface Message {
   language?: string;
   metadata?: MessageMetadata;
   approval?: ApprovalRequest;
+  userInputRequest?: UserInputRequest;
+  planStatus?: "pending" | "approved";
 }
 
 // JSON-RPC style message envelope
@@ -117,3 +143,22 @@ export interface PlanningAnswer {
 }
 
 export type PlanningPhase = "design" | "review" | "final";
+
+export type ModeKind = "plan" | "code";
+
+export interface CollaborationMode {
+  mode: ModeKind;
+  settings: {
+    model: string;
+    reasoning_effort?: ReasoningEffort;
+    developer_instructions?: string;
+  };
+}
+
+export interface CollaborationModeMask {
+  name: string;
+  mode?: ModeKind;
+  model?: string;
+  reasoning_effort?: ReasoningEffort | null;
+  developer_instructions?: string | null;
+}

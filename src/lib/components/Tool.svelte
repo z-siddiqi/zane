@@ -31,6 +31,10 @@
         return { icon: "image", label: "Image", color: "var(--cli-prefix-image)" };
       case "review":
         return { icon: "eye", label: "Review", color: "var(--cli-prefix-review)" };
+      case "plan":
+        return { icon: "plan", label: "Plan", color: "var(--cli-prefix-agent)" };
+      case "collab":
+        return { icon: "users", label: "Agent", color: "var(--cli-prefix-mcp)" };
       default:
         return { icon: "wrench", label: "Tool", color: "var(--cli-prefix-tool)" };
     }
@@ -75,6 +79,15 @@
     if (kind === "image") {
       const match = text.match(/^Image:\s*(.+?)(?:\n|$)/);
       return { title: match?.[1] || "Image", content: "" };
+    }
+
+    if (kind === "plan") {
+      return { title: "Proposed Plan", content: text };
+    }
+
+    if (kind === "collab") {
+      const lines = text.split("\n");
+      return { title: lines[0] || "Agent", content: lines.slice(1).join("\n") };
     }
 
     return { title: text.slice(0, 50), content: text };
@@ -139,6 +152,20 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/>
           <circle cx="12" cy="12" r="3"/>
+        </svg>
+      {:else if toolConfig.icon === "plan"}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+          <path d="M9 14h6"/>
+          <path d="M9 18h6"/>
+        </svg>
+      {:else if toolConfig.icon === "users"}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
         </svg>
       {:else}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

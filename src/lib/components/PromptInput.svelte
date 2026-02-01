@@ -1,9 +1,10 @@
 <script lang="ts">
-  import type { ModelOption, ReasoningEffort } from "../types";
+  import type { ModeKind, ModelOption, ReasoningEffort } from "../types";
 
   interface Props {
     model: string;
     reasoningEffort: ReasoningEffort;
+    mode?: ModeKind;
     modelOptions?: ModelOption[];
     modelsLoading?: boolean;
     disabled?: boolean;
@@ -11,11 +12,13 @@
     onSubmit: (input: string) => void;
     onModelChange: (model: string) => void;
     onReasoningChange: (effort: ReasoningEffort) => void;
+    onModeChange?: (mode: ModeKind) => void;
   }
 
   const {
     model,
     reasoningEffort,
+    mode = "code",
     modelOptions = [],
     modelsLoading = false,
     disabled = false,
@@ -23,6 +26,7 @@
     onSubmit,
     onModelChange,
     onReasoningChange,
+    onModeChange,
   }: Props = $props();
 
   let input = $state("");
@@ -101,8 +105,8 @@
               <path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4Z"/>
               <circle cx="12" cy="14" r="2"/>
             </svg>
-            <span>{selectedModel}</span>
-            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <span class="collapsible-label">{selectedModel}</span>
+            <svg class="chevron collapsible-label" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="m6 9 6 6 6-6"/>
             </svg>
           </button>
@@ -158,8 +162,8 @@
               <path d="M6 18a4 4 0 0 1-1.967-.516"/>
               <path d="M19.967 17.484A4 4 0 0 1 18 18"/>
             </svg>
-            <span>{selectedReasoning}</span>
-            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <span class="collapsible-label">{selectedReasoning}</span>
+            <svg class="chevron collapsible-label" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="m6 9 6 6 6-6"/>
             </svg>
           </button>
@@ -186,6 +190,30 @@
             </div>
           {/if}
         </div>
+
+        <!-- Mode Toggle -->
+        {#if onModeChange}
+          <button
+            type="button"
+            class="tool-btn mode-toggle row"
+            class:active={mode === "plan"}
+            onclick={() => onModeChange(mode === "plan" ? "code" : "plan")}
+          >
+            {#if mode === "plan"}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+              </svg>
+              <span>Plan</span>
+            {:else}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="16 18 22 12 16 6"/>
+                <polyline points="8 6 2 12 8 18"/>
+              </svg>
+              <span>Code</span>
+            {/if}
+          </button>
+        {/if}
       </div>
 
       {#if disabled && onStop}
@@ -297,6 +325,11 @@
     width: 0.75rem;
     height: 0.75rem;
     opacity: 0.5;
+  }
+
+  .mode-toggle.active {
+    background: color-mix(in srgb, var(--cli-prefix-agent) 15%, transparent);
+    color: var(--cli-prefix-agent);
   }
 
   /* Dropdown */
@@ -417,6 +450,12 @@
 
   .stop-btn:hover {
     opacity: 0.85;
+  }
+
+  @media (max-width: 480px) {
+    .collapsible-label {
+      display: none;
+    }
   }
 
   .spinner {

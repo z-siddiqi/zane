@@ -1,4 +1,4 @@
-import type { ApprovalPolicy, ReasoningEffort, SandboxMode, ThreadInfo, RpcMessage, ThreadSettings } from "./types";
+import type { ApprovalPolicy, CollaborationMode, CollaborationModeMask, ModeKind, ReasoningEffort, SandboxMode, ThreadInfo, RpcMessage, ThreadSettings } from "./types";
 import { socket } from "./socket.svelte";
 import { messages } from "./messages.svelte";
 import { navigate } from "../router";
@@ -18,10 +18,13 @@ class ThreadsStore {
   loading = $state(false);
 
   #settings = $state<Map<string, ThreadSettings>>(new Map());
+  #nextId = 1;
   #pendingRequests = new Map<number, string>();
   #pendingStartInput: string | null = null;
+  #pendingCollaborationMode: CollaborationMode | null = null;
   #pendingStartCallback: ((threadId: string) => void) | null = null;
   #suppressNextNavigation = false;
+  #collaborationPresets: CollaborationModeMask[] = [];
 
   constructor() {
     this.#loadSettings();
@@ -48,7 +51,7 @@ class ThreadsStore {
   }
 
   fetch() {
-    const id = Date.now();
+    const id = this.#nextId++;
     this.loading = true;
     this.#pendingRequests.set(id, "list");
     socket.send({
@@ -59,7 +62,7 @@ class ThreadsStore {
   }
 
   open(threadId: string) {
-    const id = Date.now();
+    const id = this.#nextId++;
     this.loading = true;
     this.currentId = threadId;
     messages.clearThread(threadId);
@@ -80,13 +83,42 @@ class ThreadsStore {
       sandbox?: SandboxMode | string;
       suppressNavigation?: boolean;
       onThreadStarted?: (threadId: string) => void;
+      collaborationMode?: CollaborationMode;
     }
   ) {
     this.#startThread(cwd, input, options);
   }
 
+  fetchCollaborationPresets() {
+    const id = this.#nextId++;
+    this.#pendingRequests.set(id, "collaborationPresets");
+    socket.send({
+      method: "collaborationMode/list",
+      id,
+      params: {},
+    });
+  }
+
+  resolveCollaborationMode(
+    mode: ModeKind,
+    model: string,
+    reasoningEffort?: ReasoningEffort,
+  ): CollaborationMode {
+    const preset = this.#collaborationPresets.find((p) => p.mode === mode);
+    return {
+      mode,
+      settings: {
+        model,
+        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+        ...(preset?.developer_instructions
+          ? { developer_instructions: preset.developer_instructions }
+          : {}),
+      },
+    };
+  }
+
   archive(threadId: string) {
-    const id = Date.now();
+    const id = this.#nextId++;
     this.#pendingRequests.set(id, "archive");
     socket.unsubscribeThread(threadId);
     socket.send({
@@ -124,13 +156,17 @@ class ThreadsStore {
         if (this.#pendingStartInput) {
           socket.send({
             method: "turn/start",
-            id: Date.now(),
+            id: this.#nextId++,
             params: {
               threadId: params.thread.id,
               input: [{ type: "text", text: this.#pendingStartInput }],
+              ...(this.#pendingCollaborationMode
+                ? { collaborationMode: this.#pendingCollaborationMode }
+                : {}),
             },
           });
           this.#pendingStartInput = null;
+          this.#pendingCollaborationMode = null;
         }
         this.#suppressNextNavigation = false;
       }
@@ -149,6 +185,11 @@ class ThreadsStore {
 
       if (type === "resume") {
         this.loading = false;
+      }
+
+      if (type === "collaborationPresets" && msg.result) {
+        const result = msg.result as { data: CollaborationModeMask[] };
+        this.#collaborationPresets = result.data || [];
       }
 
       if (type === "start" && msg.result) {
@@ -202,11 +243,13 @@ class ThreadsStore {
       sandbox?: SandboxMode | string;
       suppressNavigation?: boolean;
       onThreadStarted?: (threadId: string) => void;
+      collaborationMode?: CollaborationMode;
     }
   ) {
-    const id = Date.now();
+    const id = this.#nextId++;
     this.#pendingRequests.set(id, "start");
     this.#pendingStartInput = input?.trim() ? input.trim() : null;
+    this.#pendingCollaborationMode = options?.collaborationMode ?? null;
     this.#pendingStartCallback = options?.onThreadStarted ?? null;
     this.#suppressNextNavigation = options?.suppressNavigation ?? false;
     socket.send({

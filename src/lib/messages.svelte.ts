@@ -1,4 +1,4 @@
-import type { Message, RpcMessage, ApprovalRequest, TurnStatus, PlanStep } from "./types";
+import type { Message, RpcMessage, ApprovalRequest, UserInputRequest, UserInputQuestion, TurnStatus, PlanStep } from "./types";
 import { socket } from "./socket.svelte";
 import { threads } from "./threads.svelte";
 
@@ -157,6 +157,47 @@ class MessagesStore {
       id: approval.rpcId,
       result: { decision: "cancel" },
     });
+  }
+
+  respondToUserInput(messageId: string, answers: Record<string, string[]>) {
+    const threadId = threads.currentId;
+    if (!threadId) return;
+
+    const msgs = this.#byThread.get(threadId) ?? [];
+    const idx = msgs.findIndex((m) => m.id === messageId);
+    if (idx < 0) return;
+    const msg = msgs[idx];
+    if (!msg.userInputRequest || msg.userInputRequest.status !== "pending") return;
+
+    const formattedAnswers: Record<string, { answers: string[] }> = {};
+    for (const [questionId, selected] of Object.entries(answers)) {
+      formattedAnswers[questionId] = { answers: selected };
+    }
+
+    socket.send({
+      id: msg.userInputRequest.rpcId,
+      result: { answers: formattedAnswers },
+    });
+
+    const updated = [...msgs];
+    updated[idx] = {
+      ...msgs[idx],
+      userInputRequest: { ...msgs[idx].userInputRequest!, status: "answered" },
+    };
+    this.#byThread = new Map(this.#byThread).set(threadId, updated);
+  }
+
+  approvePlan(messageId: string) {
+    const threadId = threads.currentId;
+    if (!threadId) return;
+
+    const msgs = this.#byThread.get(threadId) ?? [];
+    const idx = msgs.findIndex((m) => m.id === messageId);
+    if (idx < 0) return;
+
+    const updated = [...msgs];
+    updated[idx] = { ...msgs[idx], planStatus: "approved" };
+    this.#byThread = new Map(this.#byThread).set(threadId, updated);
   }
 
   #updateApprovalInMessages(approvalId: string, status: "approved" | "declined" | "cancelled") {
@@ -493,6 +534,14 @@ class MessagesStore {
       return;
     }
 
+    // Plan item delta (streaming)
+    if (method === "item/plan/delta") {
+      const delta = (params.delta as string) || "";
+      const itemId = (params.itemId as string) || (params.item_id as string) || `plan-${threadId}`;
+      this.#updateStreamingTool(threadId, itemId, delta, "plan");
+      return;
+    }
+
     // Turn started
     if (method === "turn/started") {
       const turn = params.turn as { id: string; status?: string } | undefined;
@@ -541,6 +590,29 @@ class MessagesStore {
           status: p.status as PlanStep["status"],
         }));
       }
+      return;
+    }
+
+    // User input requests (plan mode questions)
+    if (method === "item/tool/requestUserInput") {
+      const rpcId = msg.id as number;
+      const itemId = (params.itemId as string) || (params.item_id as string) || `user-input-${Date.now()}`;
+      const questions = (params.questions as UserInputQuestion[]) || [];
+
+      const userInputRequest: UserInputRequest = {
+        rpcId,
+        questions,
+        status: "pending",
+      };
+
+      this.#add(threadId, {
+        id: `user-input-${itemId}`,
+        role: "assistant",
+        kind: "user-input-request",
+        text: questions.map((q) => q.question).join("\n"),
+        threadId,
+        userInputRequest,
+      });
       return;
     }
 
@@ -599,7 +671,7 @@ class MessagesStore {
 
       switch (type) {
         case "agentMessage": {
-          const text = (item.text as string) || "";
+          const text = ((item.text as string) || "").replace(/<proposed_plan>[\s\S]*?<\/proposed_plan>/g, "").trim();
           if (!text) return;
           const pendingId = this.#pendingAgentMessageIds.get(threadId);
           if (pendingId && pendingId !== itemId) {
@@ -667,6 +739,27 @@ class MessagesStore {
           this.#upsert(threadId, { id: itemId, role: "tool", kind: "review", text, threadId });
           return;
         }
+        case "plan": {
+          const text = ((item.text as string) || "").replace(/<\/?proposed_plan>/g, "").trim();
+          this.#upsert(threadId, { id: itemId, role: "tool", kind: "plan", text, threadId });
+          this.#clearStreaming(threadId, itemId);
+          return;
+        }
+        case "collabAgentToolCall": {
+          const tool = (item.tool as string) || "spawnAgent";
+          const receivers = (item.receiverThreadIds as string[]) || [];
+          const prompt = (item.prompt as string) || "";
+          const status = (item.status as string) || "completed";
+          const lines = [`${tool}: ${receivers.join(", ") || "—"}`];
+          if (prompt) lines.push(prompt);
+          lines.push(`Status: ${status}`);
+          this.#upsert(threadId, { id: itemId, role: "tool", kind: "collab", text: lines.join("\n"), threadId });
+          return;
+        }
+        case "contextCompaction": {
+          this.#upsert(threadId, { id: itemId, role: "tool", kind: "compaction", text: "Context compacted", threadId });
+          return;
+        }
         default:
           return;
       }
@@ -695,14 +788,18 @@ class MessagesStore {
             break;
           }
 
-          case "agentMessage":
-            messages.push({
-              id,
-              role: "assistant",
-              text: (item.text as string) || "",
-              threadId,
-            });
+          case "agentMessage": {
+            const agentText = ((item.text as string) || "").replace(/<proposed_plan>[\s\S]*?<\/proposed_plan>/g, "").trim();
+            if (agentText) {
+              messages.push({
+                id,
+                role: "assistant",
+                text: agentText,
+                threadId,
+              });
+            }
             break;
+          }
 
           case "reasoning": {
             const text = this.#extractReasoningSummary(this.#reasoningTextFromItem(item));
@@ -790,7 +887,40 @@ class MessagesStore {
             });
             break;
           }
+
+          case "plan": {
+            const text = ((item.text as string) || "").replace(/<\/?proposed_plan>/g, "").trim();
+            if (text) messages.push({ id, role: "tool", kind: "plan", text, threadId });
+            break;
+          }
+
+          case "collabAgentToolCall": {
+            const tool = (item.tool as string) || "spawnAgent";
+            const receivers = (item.receiverThreadIds as string[]) || [];
+            const prompt = (item.prompt as string) || "";
+            const status = (item.status as string) || "completed";
+            const lines = [`${tool}: ${receivers.join(", ") || "—"}`];
+            if (prompt) lines.push(prompt);
+            lines.push(`Status: ${status}`);
+            messages.push({ id, role: "tool", kind: "collab", text: lines.join("\n"), threadId });
+            break;
+          }
+
+          case "contextCompaction":
+            messages.push({ id, role: "tool", kind: "compaction", text: "Context compacted", threadId });
+            break;
         }
+      }
+    }
+
+    // Mark plans as approved if a user message follows them
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i].kind !== "plan") continue;
+      const hasFollowUp = messages.slice(i + 1).some(
+        (m) => m.role === "user" || (m.role === "assistant" && m.kind !== "reasoning"),
+      );
+      if (hasFollowUp) {
+        messages[i] = { ...messages[i], planStatus: "approved" };
       }
     }
 

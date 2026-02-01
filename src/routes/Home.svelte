@@ -1,6 +1,7 @@
 <script lang="ts">
   import { socket } from "../lib/socket.svelte";
   import { threads } from "../lib/threads.svelte";
+  import { models } from "../lib/models.svelte";
   import { config } from "../lib/config.svelte";
   import { theme } from "../lib/theme.svelte";
   import { auth } from "../lib/auth.svelte";
@@ -71,22 +72,18 @@
   let showTaskModal = $state(false);
   let taskNote = $state("");
   let taskProject = $state("");
+  let taskModel = $state("");
   let taskPlanFirst = $state(true);
   let permissionLevel = $state<keyof typeof permissionPresets>("standard");
   let recentProjects = $state(loadRecentProjects());
   let isCreating = $state(false);
 
-  function buildPlanningPrompt(note: string, projectPath: string): string {
-    return `Help me plan this: ${note}
-
----
-
-PROJECT: ${projectPath || "Not specified"}`;
-  }
-
-  function buildDirectPrompt(note: string): string {
-    return note;
-  }
+  // Default to first available model
+  $effect(() => {
+    if (!taskModel && models.options.length > 0) {
+      taskModel = models.options[0].value;
+    }
+  });
 
   function openTaskModal() {
     showTaskModal = true;
@@ -98,6 +95,7 @@ PROJECT: ${projectPath || "Not specified"}`;
     taskProject = "";
     taskPlanFirst = true;
     permissionLevel = "standard";
+    taskModel = models.options[0]?.value ?? "";
   }
 
   async function handleCreateTask(e?: Event) {
@@ -108,15 +106,14 @@ PROJECT: ${projectPath || "Not specified"}`;
     try {
       recentProjects = addRecentProject(taskProject, recentProjects);
 
-      const prompt = taskPlanFirst
-        ? buildPlanningPrompt(taskNote, taskProject)
-        : buildDirectPrompt(taskNote);
-
       const preset = permissionPresets[permissionLevel];
-      threads.start(taskProject, prompt, {
+      threads.start(taskProject, taskNote, {
         approvalPolicy: preset.approvalPolicy,
         sandbox: preset.sandbox,
         suppressNavigation: false,
+        collaborationMode: taskPlanFirst
+          ? threads.resolveCollaborationMode("plan", taskModel)
+          : undefined,
       });
 
       closeTaskModal();
@@ -143,6 +140,7 @@ PROJECT: ${projectPath || "Not specified"}`;
   $effect(() => {
     if (socket.status === "connected") {
       threads.fetch();
+      threads.fetchCollaborationPresets();
     }
   });
 </script>
@@ -265,6 +263,21 @@ PROJECT: ${projectPath || "Not specified"}`;
               {/each}
             </div>
           {/if}
+        </div>
+
+        <div class="field stack">
+          <label for="task-model">model</label>
+          <select id="task-model" bind:value={taskModel}>
+            {#if models.status === "loading"}
+              <option value="">Loading...</option>
+            {:else if models.options.length === 0}
+              <option value="">No models available</option>
+            {:else}
+              {#each models.options as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            {/if}
+          </select>
         </div>
 
         <div class="field stack">
