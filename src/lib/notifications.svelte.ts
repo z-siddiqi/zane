@@ -83,6 +83,12 @@ class NotificationsStore {
     }
   }
 
+  async sendTestPush(): Promise<void> {
+    if (socket.isHealthy) {
+      socket.send({ type: "orbit.push-test" } as unknown as RpcMessage);
+    }
+  }
+
   async #checkExistingPushSubscription(): Promise<void> {
     if (!("serviceWorker" in navigator)) return;
 

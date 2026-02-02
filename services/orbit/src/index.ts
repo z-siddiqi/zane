@@ -455,6 +455,11 @@ export class OrbitRelay {
       return true;
     }
 
+    if (msg.type === "orbit.push-test" && role === "client") {
+      this.sendTestPush(socket);
+      return true;
+    }
+
     return false;
   }
 
@@ -598,16 +603,10 @@ export class OrbitRelay {
       }
 
       // Send push notification for blocking events (async, non-blocking)
-      // Skip if there's an active client subscribed to the thread
       if (msg) {
         const method = extractMethod(msg);
         if (method && this.isPushWorthy(method)) {
-          const hasActiveClient = threadId
-            ? (this.threadToClients.get(threadId)?.size ?? 0) > 0
-            : this.clientSockets.size > 0;
-          if (!hasActiveClient) {
-            this.sendPushNotifications(msg, method, threadId);
-          }
+          this.sendPushNotifications(msg, method, threadId);
         }
       }
     }
@@ -745,6 +744,51 @@ export class OrbitRelay {
       console.log(`[orbit] push: subscription removed for user ${this.userId}`);
     } catch (err) {
       console.warn("[orbit] push: failed to remove subscription", err);
+    }
+  }
+
+  private async sendTestPush(_socket: WebSocket): Promise<void> {
+    if (!this.env.DB || !this.userId) return;
+
+    const vapidPublic = this.env.VAPID_PUBLIC_KEY?.trim();
+    const vapidPrivate = this.env.VAPID_PRIVATE_KEY?.trim();
+    const vapidSubject = this.env.VAPID_SUBJECT?.trim();
+    if (!vapidPublic || !vapidPrivate || !vapidSubject) return;
+
+    const vapid: VapidKeys = { publicKey: vapidPublic, privateKey: vapidPrivate, subject: vapidSubject };
+
+    try {
+      const { results } = await this.env.DB.prepare(
+        "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?"
+      )
+        .bind(this.userId)
+        .all<{ endpoint: string; p256dh: string; auth: string }>();
+
+      if (!results.length) return;
+
+      const payload: PushPayload = {
+        type: "test",
+        title: "Test Notification",
+        body: "Push notifications are working!",
+        threadId: "",
+        actionUrl: "/app",
+      };
+
+      for (const row of results) {
+        try {
+          const result = await sendPush(row, payload, vapid);
+          console.log(`[orbit] push-test: status=${result.status} ok=${result.ok}`);
+          if (result.expired) {
+            await this.env.DB.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?")
+              .bind(row.endpoint)
+              .run();
+          }
+        } catch (err) {
+          console.warn("[orbit] push-test: failed to send", err);
+        }
+      }
+    } catch (err) {
+      console.warn("[orbit] push-test: failed", err);
     }
   }
 

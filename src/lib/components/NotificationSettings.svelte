@@ -27,9 +27,14 @@
       <div class="setting-row">
         <span class="setting-label">Push notifications</span>
         {#if notifications.pushSubscribed}
-          <button type="button" class="setting-btn" onclick={() => notifications.unsubscribePush()}>
-            Disable
-          </button>
+          <div class="btn-group">
+            <button type="button" class="setting-btn" onclick={() => notifications.unsubscribePush()}>
+              Disable
+            </button>
+            <button type="button" class="setting-btn" onclick={() => notifications.sendTestPush()}>
+              Test
+            </button>
+          </div>
         {:else}
           <button type="button" class="setting-btn" onclick={() => notifications.subscribePush()}>
             Enable
@@ -98,6 +103,11 @@
     background: var(--cli-selection);
     color: var(--cli-text);
     border-color: var(--cli-text-muted);
+  }
+
+  .btn-group {
+    display: flex;
+    gap: var(--space-xs);
   }
 
   .hint {

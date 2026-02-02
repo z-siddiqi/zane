@@ -7,6 +7,9 @@ durable_objects.bindings = [
   { name = "ORBIT_DO", class_name = "OrbitRelay" }
 ]
 
+[observability]
+enabled = true
+
 [[d1_databases]]
 binding = "DB"
 database_name = "zane"

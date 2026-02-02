@@ -74,16 +74,16 @@ export async function sendPush(sub: PushSubscription, payload: PushPayload, vapi
   };
 
   const message = {
-    payload: JSON.stringify(payload),
-    ttl: 3600,
+    payload,
+    adminContact: vapid.subject,
+    options: { ttl: 3600 },
   };
 
-  const { endpoint, headers, body } = await buildPushHTTPRequest(
-    privateJwk,
+  const { endpoint, headers, body } = await buildPushHTTPRequest({
+    privateJWK: privateJwk,
     message,
     subscription,
-    vapid.subject
-  );
+  });
   const response = await fetch(endpoint, {
     method: "POST",
     headers,
