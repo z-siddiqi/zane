@@ -1,6 +1,7 @@
 <script lang="ts">
   import { auth } from "../lib/auth.svelte";
   import { theme } from "../lib/theme.svelte";
+  import { pwa } from "../lib/pwa.svelte";
 
   const themeIcons = { system: "◐", light: "○", dark: "●" } as const;
 
@@ -38,6 +39,9 @@
   <header class="landing-header">
     <div class="brand">zane</div>
     <div class="header-actions">
+      {#if pwa.canInstall && !pwa.isStandalone}
+        <button class="ghost-btn" type="button" onclick={() => pwa.install()}>Install app</button>
+      {/if}
       {#if isSignedIn}
         <a class="primary-btn" href="/app">Go to app</a>
       {/if}
@@ -82,8 +86,8 @@
   </footer>
 
   {#if showAuthModal}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="modal-overlay" onclick={closeModal}></div>
+    <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+    <div class="modal-overlay" role="presentation" onclick={closeModal}></div>
     <div class="auth-modal" role="dialog" aria-modal="true">
       <div class="modal-header">
         <span>{authMode === "login" ? "Sign in" : "Create account"}</span>
@@ -305,7 +309,6 @@
     background: var(--cli-bg);
     color: var(--cli-text);
     font-family: var(--font-mono);
-    font-size: var(--text-sm);
     outline: none;
   }
 

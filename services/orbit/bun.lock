@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "orbit",
+      "dependencies": {
+        "@pushforge/builder": "^1.1.0",
+      },
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20250909.0",
         "wrangler": "^3.100.0",
@@ -124,6 +127,8 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.9", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.0.3", "@jridgewell/sourcemap-codec": "^1.4.10" } }, "sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ=="],
+
+    "@pushforge/builder": ["@pushforge/builder@1.1.2", "", { "bin": { "generate-vapid-keys": "dist/lib/commandLine/keys.js" } }, "sha512-9dhcm++aBKRAWo/1qLF1WSOqfn9ZHDNdAd0JAVSw1XjvQNxpe07ObXw0IiCng7Fa5q3rmam7DzLi0bs/W2Aumw=="],
 
     "acorn": ["acorn@8.14.0", "", { "bin": { "acorn": "bin/acorn" } }, "sha512-cl669nCJTZBsL97OF4kUQm5g5hC2uihk0NxY3WENAC0TYdILVkAyHymAntgxGkl7K+t0cXIrH5siy5S4XkFycA=="],
 

@@ -156,7 +156,6 @@
       <button type="button" onclick={() => theme.cycle()} title="Theme: {theme.current}">
         {themeIcons[theme.current]}
       </button>
-      <button type="button" onclick={() => auth.signOut()} title="Sign out">⏻</button>
     {/snippet}
   </AppHeader>
 
@@ -221,7 +220,8 @@
   {/if}
 
   {#if showTaskModal}
-    <div class="modal-overlay" onclick={closeTaskModal}></div>
+    <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+    <div class="modal-overlay" role="presentation" onclick={closeTaskModal}></div>
     <div class="task-modal" role="dialog" aria-modal="true">
       <div class="modal-header">
         <span>New task</span>
@@ -338,7 +338,6 @@
     border-radius: var(--radius-sm);
     color: var(--cli-text);
     font-family: var(--font-mono);
-    font-size: var(--text-base);
   }
 
   .field input:focus,
@@ -459,7 +458,6 @@
     border-radius: var(--radius-sm);
     color: var(--cli-text);
     font-family: var(--font-mono);
-    font-size: var(--text-sm);
   }
 
   .modal-body textarea:focus,

@@ -48,11 +48,7 @@
 </script>
 
 <div class="task-page stack">
-    <AppHeader status={socket.status}>
-        {#snippet actions()}
-            <a href="/">back</a>
-        {/snippet}
-    </AppHeader>
+    <AppHeader status={socket.status} />
 
     <main class="task-body">
         <div class="task-body-inner">

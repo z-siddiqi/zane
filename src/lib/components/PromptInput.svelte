@@ -262,7 +262,6 @@
     flex: 1;
     padding: var(--space-md);
     font-family: var(--font-mono);
-    font-size: var(--text-base);
     line-height: 1.6;
     color: var(--cli-text);
     background: transparent;

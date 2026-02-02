@@ -142,33 +142,8 @@ class ThreadsStore {
     if (msg.method === "thread/started") {
       const params = msg.params as { thread: ThreadInfo };
       if (params?.thread) {
-        // Idempotent: covers new threads (not opened via open()) that need subscribing
         socket.subscribeThread(params.thread.id);
-        this.list = [params.thread, ...this.list];
-        this.currentId = params.thread.id;
-        if (this.#pendingStartCallback) {
-          this.#pendingStartCallback(params.thread.id);
-          this.#pendingStartCallback = null;
-        }
-        if (!this.#suppressNextNavigation) {
-          navigate("/thread/:id", { params: { id: params.thread.id } });
-        }
-        if (this.#pendingStartInput) {
-          socket.send({
-            method: "turn/start",
-            id: this.#nextId++,
-            params: {
-              threadId: params.thread.id,
-              input: [{ type: "text", text: this.#pendingStartInput }],
-              ...(this.#pendingCollaborationMode
-                ? { collaborationMode: this.#pendingCollaborationMode }
-                : {}),
-            },
-          });
-          this.#pendingStartInput = null;
-          this.#pendingCollaborationMode = null;
-        }
-        this.#suppressNextNavigation = false;
+        this.#handleNewThread(params.thread);
       }
       return;
     }
@@ -199,17 +174,52 @@ class ThreadsStore {
           reasoningEffort?: ReasoningEffort;
           sandbox?: { type?: string } | string;
         };
-        const threadId = result.thread?.id;
-        if (threadId) {
+        const thread = result.thread;
+        if (thread?.id) {
           const sandbox = this.#normalizeSandbox(result.sandbox);
-          this.updateSettings(threadId, {
+          this.updateSettings(thread.id, {
             model: result.model ?? "",
             reasoningEffort: result.reasoningEffort ?? DEFAULT_SETTINGS.reasoningEffort,
             ...(sandbox ? { sandbox } : {}),
           });
+
+          // Handle thread creation if thread/started notification hasn't arrived
+          if (!this.list.some((t) => t.id === thread.id)) {
+            socket.subscribeThread(thread.id);
+            this.#handleNewThread(thread);
+          }
         }
       }
     }
+  }
+
+  #handleNewThread(thread: ThreadInfo) {
+    if (this.list.some((t) => t.id === thread.id)) return;
+    this.list = [thread, ...this.list];
+    this.currentId = thread.id;
+    if (this.#pendingStartCallback) {
+      this.#pendingStartCallback(thread.id);
+      this.#pendingStartCallback = null;
+    }
+    if (!this.#suppressNextNavigation) {
+      navigate("/thread/:id", { params: { id: thread.id } });
+    }
+    if (this.#pendingStartInput) {
+      socket.send({
+        method: "turn/start",
+        id: this.#nextId++,
+        params: {
+          threadId: thread.id,
+          input: [{ type: "text", text: this.#pendingStartInput }],
+          ...(this.#pendingCollaborationMode
+            ? { collaborationMode: this.#pendingCollaborationMode }
+            : {}),
+        },
+      });
+      this.#pendingStartInput = null;
+      this.#pendingCollaborationMode = null;
+    }
+    this.#suppressNextNavigation = false;
   }
 
   #normalizeSandbox(input: unknown): SandboxMode | null {

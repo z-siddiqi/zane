@@ -6,7 +6,6 @@
     import { messages } from "../lib/messages.svelte";
     import { models } from "../lib/models.svelte";
     import { theme } from "../lib/theme.svelte";
-    import { auth } from "../lib/auth.svelte";
     import AppHeader from "../lib/components/AppHeader.svelte";
     import MessageBlock from "../lib/components/MessageBlock.svelte";
     import ApprovalPrompt from "../lib/components/ApprovalPrompt.svelte";
@@ -172,7 +171,6 @@
             <button type="button" onclick={() => theme.cycle()} title="Theme: {theme.current}">
                 {themeIcons[theme.current]}
             </button>
-            <button type="button" onclick={() => auth.signOut()} title="Sign out">⏻</button>
         {/snippet}
     </AppHeader>
 

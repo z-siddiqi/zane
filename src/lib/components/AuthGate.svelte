@@ -141,7 +141,6 @@
         background: var(--cli-bg);
         color: var(--cli-text);
         font-family: var(--font-mono);
-        font-size: var(--text-sm);
         outline: none;
     }
 

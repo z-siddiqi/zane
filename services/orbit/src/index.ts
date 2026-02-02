@@ -1,9 +1,14 @@
+import { sendPush, type PushPayload, type VapidKeys } from "./push";
+
 type Role = "client" | "anchor";
 type Direction = "client" | "server";
 
 export interface Env {
   ZANE_WEB_JWT_SECRET?: string;
   ZANE_ANCHOR_JWT_SECRET?: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
   DB?: D1Database;
   ORBIT_DO: DurableObjectNamespace;
 }
@@ -440,6 +445,16 @@ export class OrbitRelay {
       return true;
     }
 
+    if (msg.type === "orbit.push-subscribe" && role === "client") {
+      this.savePushSubscription(msg);
+      return true;
+    }
+
+    if (msg.type === "orbit.push-unsubscribe" && role === "client") {
+      this.removePushSubscription(msg);
+      return true;
+    }
+
     return false;
   }
 
@@ -561,15 +576,38 @@ export class OrbitRelay {
               console.warn("[orbit] failed to relay message", err);
             }
           }
-          return;
+        } else {
+          // No subscribers yet (e.g. thread/start response) — broadcast to all clients
+          for (const target of this.clientSockets.keys()) {
+            try {
+              target.send(data);
+            } catch (err) {
+              console.warn("[orbit] failed to relay message", err);
+            }
+          }
+        }
+      } else {
+        // No threadId — broadcast to all clients
+        for (const target of this.clientSockets.keys()) {
+          try {
+            target.send(data);
+          } catch (err) {
+            console.warn("[orbit] failed to relay message", err);
+          }
         }
       }
-      // No threadId or no subscribers yet — broadcast to all clients
-      for (const target of this.clientSockets.keys()) {
-        try {
-          target.send(data);
-        } catch (err) {
-          console.warn("[orbit] failed to relay message", err);
+
+      // Send push notification for blocking events (async, non-blocking)
+      // Skip if there's an active client subscribed to the thread
+      if (msg) {
+        const method = extractMethod(msg);
+        if (method && this.isPushWorthy(method)) {
+          const hasActiveClient = threadId
+            ? (this.threadToClients.get(threadId)?.size ?? 0) > 0
+            : this.clientSockets.size > 0;
+          if (!hasActiveClient) {
+            this.sendPushNotifications(msg, method, threadId);
+          }
         }
       }
     }
@@ -602,6 +640,119 @@ export class OrbitRelay {
     }
 
     return false;
+  }
+
+  private isPushWorthy(method: string): boolean {
+    return method.endsWith("/requestApproval") || method === "item/tool/requestUserInput";
+  }
+
+  private buildPushPayload(msg: Record<string, unknown>, method: string, threadId: string | null): PushPayload {
+    const params = asRecord(msg.params);
+    const reason = (params?.reason as string) || "";
+
+    let type = "approval";
+    let title = "Approval Required";
+    let body = reason || "An action requires your approval";
+
+    if (method === "item/fileChange/requestApproval") {
+      title = "File Change Approval";
+      body = reason || "A file change needs your approval";
+    } else if (method === "item/commandExecution/requestApproval") {
+      title = "Command Approval";
+      body = reason || "A command needs your approval";
+    } else if (method === "item/mcpToolCall/requestApproval") {
+      title = "Tool Call Approval";
+      body = reason || "A tool call needs your approval";
+    } else if (method === "item/tool/requestUserInput") {
+      type = "user-input";
+      title = "Input Required";
+      const questions = (params?.questions as Array<{ question: string }>) || [];
+      body = questions[0]?.question || "Input required";
+    }
+
+    return {
+      type,
+      title,
+      body,
+      threadId: threadId || "",
+      actionUrl: threadId ? `/thread/${threadId}` : "/app",
+    };
+  }
+
+  private async sendPushNotifications(msg: Record<string, unknown>, method: string, threadId: string | null): Promise<void> {
+    if (!this.env.DB || !this.userId) return;
+
+    const vapidPublic = this.env.VAPID_PUBLIC_KEY?.trim();
+    const vapidPrivate = this.env.VAPID_PRIVATE_KEY?.trim();
+    const vapidSubject = this.env.VAPID_SUBJECT?.trim();
+    if (!vapidPublic || !vapidPrivate || !vapidSubject) return;
+
+    const vapid: VapidKeys = { publicKey: vapidPublic, privateKey: vapidPrivate, subject: vapidSubject };
+
+    try {
+      const { results } = await this.env.DB.prepare(
+        "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?"
+      )
+        .bind(this.userId)
+        .all<{ endpoint: string; p256dh: string; auth: string }>();
+
+      if (!results.length) return;
+
+      const payload = this.buildPushPayload(msg, method, threadId);
+
+      for (const row of results) {
+        try {
+          const result = await sendPush(row, payload, vapid);
+          if (result.expired) {
+            await this.env.DB.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?")
+              .bind(row.endpoint)
+              .run();
+            console.log(`[orbit] push: removed expired subscription`);
+          }
+        } catch (err) {
+          console.warn("[orbit] push: failed to send", err);
+        }
+      }
+    } catch (err) {
+      console.warn("[orbit] push: failed to query subscriptions", err);
+    }
+  }
+
+  private async savePushSubscription(msg: Record<string, unknown>): Promise<void> {
+    if (!this.env.DB || !this.userId) return;
+
+    if (typeof msg.endpoint !== "string" || typeof msg.p256dh !== "string" || typeof msg.auth !== "string") return;
+    const endpoint = msg.endpoint;
+    const p256dh = msg.p256dh;
+    const auth = msg.auth;
+    if (!endpoint || !p256dh || !auth) return;
+
+    try {
+      await this.env.DB.prepare(
+        "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth"
+      )
+        .bind(this.userId, endpoint, p256dh, auth, Math.floor(Date.now() / 1000))
+        .run();
+      console.log(`[orbit] push: subscription saved for user ${this.userId}`);
+    } catch (err) {
+      console.warn("[orbit] push: failed to save subscription", err);
+    }
+  }
+
+  private async removePushSubscription(msg: Record<string, unknown>): Promise<void> {
+    if (!this.env.DB || !this.userId) return;
+
+    const endpoint = msg.endpoint as string;
+    if (!endpoint) return;
+
+    try {
+      await this.env.DB.prepare("DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?")
+        .bind(endpoint, this.userId)
+        .run();
+      console.log(`[orbit] push: subscription removed for user ${this.userId}`);
+    } catch (err) {
+      console.warn("[orbit] push: failed to remove subscription", err);
+    }
   }
 
   private async logEvent(data: unknown, direction: Direction): Promise<void> {
