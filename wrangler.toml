@@ -1,8 +1,8 @@
-name = "zane"
+name = "getzane"
 pages_build_output_dir = "dist"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "zane"
-database_id = "ca5a5a6b-6822-4246-8fc2-136ed5b1c6a0"
+database_name = "zane-waitlist"
+database_id = "2e68657f-ac5b-4fbd-878f-32f21072f9f9"
 migrations_dir = "migrations"
