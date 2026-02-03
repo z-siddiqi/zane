@@ -4,9 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "bunx wrangler dev",
-    "deploy": "node ./scripts/require-env.mjs && bunx wrangler deploy",
-    "types": "bunx wrangler types",
-    "check-env": "node ./scripts/require-env.mjs"
+    "deploy": "bunx wrangler deploy",
+    "types": "bunx wrangler types"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250909.0",
