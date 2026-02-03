@@ -28,10 +28,10 @@ Set via `wrangler secret put`:
 
 ## How it works
 
-This is a single-user auth system:
+Passkey-based auth with multi-user support:
 
-1. **First visit**: No passkey exists, so anyone can register (first come, first served)
-2. **After setup**: Must sign in with existing passkey to access the app
+1. **First visit**: No users exist, so the UI shows a setup screen to register
+2. **After setup**: Users see a normal login/register page
 3. **Adding devices**: Sign in first, then register another passkey from the new device
 
 ## Adding a new passkey
@@ -63,10 +63,16 @@ await fetch("/auth/register/verify", {
 
 ## Endpoints
 
-| Method | Path                     | Description                |
-| ------ | ------------------------ | -------------------------- |
-| GET    | `/auth/session`          | Get auth status            |
-| POST   | `/auth/register/options` | Start passkey registration |
-| POST   | `/auth/register/verify`  | Complete registration      |
-| POST   | `/auth/login/options`    | Start passkey login        |
-| POST   | `/auth/login/verify`     | Complete login             |
+| Method | Path                      | Description                     |
+| ------ | ------------------------- | ------------------------------- |
+| GET    | `/health`                 | Health check                    |
+| GET    | `/auth/session`           | Get auth status                 |
+| POST   | `/auth/register/options`  | Start passkey registration      |
+| POST   | `/auth/register/verify`   | Complete registration           |
+| POST   | `/auth/login/options`     | Start passkey login             |
+| POST   | `/auth/login/verify`      | Complete login                  |
+| POST   | `/auth/refresh`           | Rotate refresh token for new JWT |
+| POST   | `/auth/logout`            | Revoke current session          |
+| POST   | `/auth/device/code`       | Request a device code (CLI)     |
+| POST   | `/auth/device/token`      | Poll for JWT after device auth  |
+| POST   | `/auth/device/authorise`  | Authorise a pending device code |
