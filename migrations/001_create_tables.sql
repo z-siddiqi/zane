@@ -44,11 +44,14 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
   revoked_at INTEGER,
+  refresh_token TEXT,
+  refresh_expires_at INTEGER,
   FOREIGN KEY(user_id) REFERENCES passkey_users(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_revoked ON auth_sessions(revoked_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_refresh ON auth_sessions(refresh_token);
 
 -- Push subscriptions (Web Push API)
 CREATE TABLE IF NOT EXISTS push_subscriptions (

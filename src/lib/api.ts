@@ -24,6 +24,27 @@ export class ApiError extends Error {
   }
 }
 
+async function doFetch(
+  method: string,
+  baseUrl: string,
+  path: string,
+  body?: unknown
+): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (auth.token) {
+    headers["authorization"] = `Bearer ${auth.token}`;
+  }
+  if (body !== undefined) {
+    headers["content-type"] = "application/json";
+  }
+
+  return await fetch(`${baseUrl}${path}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -34,19 +55,15 @@ async function request<T>(
     throw new ApiError(0, "No API URL configured");
   }
 
-  const headers: Record<string, string> = {};
-  if (auth.token) {
-    headers["authorization"] = `Bearer ${auth.token}`;
-  }
-  if (body !== undefined) {
-    headers["content-type"] = "application/json";
-  }
+  let response = await doFetch(method, baseUrl, path, body);
 
-  const response = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  // On 401, attempt token refresh and retry once
+  if (response.status === 401) {
+    const refreshed = await auth.tryRefresh();
+    if (refreshed) {
+      response = await doFetch(method, baseUrl, path, body);
+    }
+  }
 
   if (!response.ok) {
     const text = await response.text();

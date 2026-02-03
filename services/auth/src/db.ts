@@ -17,12 +17,18 @@ interface PasskeyCredentialRow {
   backed_up: number;
 }
 
+/**
+ * created_at and revoked_at use milliseconds (Date.now()).
+ * expires_at and refresh_expires_at use seconds (Unix epoch).
+ */
 interface AuthSessionRow {
   id: string;
   user_id: string;
   created_at: number;
   expires_at: number;
   revoked_at: number | null;
+  refresh_token: string | null;
+  refresh_expires_at: number | null;
 }
 
 export function randomUserId(): string {
@@ -140,21 +146,27 @@ export async function updateCounter(env: CloudflareEnv, id: string, counter: num
     .run();
 }
 
+/**
+ * Stores a session record. The refreshTokenHash should be the SHA-256 hash
+ * of the raw refresh token (only the hash is persisted).
+ */
 export async function createSessionRecord(
   env: CloudflareEnv,
   sessionId: string,
   userId: string,
-  expiresAt: number
+  expiresAt: number,
+  refreshTokenHash: string,
+  refreshExpiresAt: number
 ): Promise<void> {
   await env.DB.prepare(
-    "INSERT INTO auth_sessions (id, user_id, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, NULL)"
+    "INSERT INTO auth_sessions (id, user_id, created_at, expires_at, revoked_at, refresh_token, refresh_expires_at) VALUES (?, ?, ?, ?, NULL, ?, ?)"
   )
-    .bind(sessionId, userId, Date.now(), expiresAt)
+    .bind(sessionId, userId, Date.now(), expiresAt, refreshTokenHash, refreshExpiresAt)
     .run();
 }
 
 export async function getSessionRecord(env: CloudflareEnv, sessionId: string): Promise<AuthSessionRow | null> {
-  return await env.DB.prepare("SELECT id, user_id, created_at, expires_at, revoked_at FROM auth_sessions WHERE id = ?")
+  return await env.DB.prepare("SELECT id, user_id, created_at, expires_at, revoked_at, refresh_token, refresh_expires_at FROM auth_sessions WHERE id = ?")
     .bind(sessionId)
     .first<AuthSessionRow>();
 }
@@ -163,4 +175,21 @@ export async function revokeSession(env: CloudflareEnv, sessionId: string): Prom
   await env.DB.prepare("UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
     .bind(Date.now(), sessionId)
     .run();
+}
+
+/**
+ * Atomically consume a refresh token: find the session, revoke it, and return
+ * the old row. The UPDATE ... WHERE ensures only one concurrent caller wins.
+ */
+export async function consumeRefreshToken(
+  env: CloudflareEnv,
+  refreshTokenHash: string,
+  nowSec: number
+): Promise<AuthSessionRow | null> {
+  const row = await env.DB.prepare(
+    "UPDATE auth_sessions SET revoked_at = ? WHERE refresh_token = ? AND revoked_at IS NULL AND refresh_expires_at > ? RETURNING id, user_id, created_at, expires_at, revoked_at, refresh_token, refresh_expires_at"
+  )
+    .bind(Date.now(), refreshTokenHash, nowSec)
+    .first<AuthSessionRow>();
+  return row ?? null;
 }

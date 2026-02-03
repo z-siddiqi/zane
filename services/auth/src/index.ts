@@ -13,7 +13,7 @@ import {
 
 import type { ChallengeRecord, DeviceCodeRecord, StoredCredential, StoredUser } from "./types";
 import { base64UrlDecode, base64UrlEncode, corsHeaders, getRpId, isAllowedOrigin } from "./utils";
-import { createSession, verifySession } from "./session";
+import { createSession, refreshSession, verifySession } from "./session";
 import {
   createUser,
   getCredential,
@@ -207,7 +207,7 @@ async function handleRegisterOptions(req: Request, env: CloudflareEnv): Promise<
 
     const existingByName = await getUserByName(env, name);
     if (existingByName) {
-      return Response.json({ error: "Username already taken." }, { status: 409, headers: corsHeaders(req, env) });
+      return Response.json({ error: "Registration failed." }, { status: 400, headers: corsHeaders(req, env) });
     }
 
     userId = randomUserId();
@@ -302,7 +302,7 @@ async function handleRegisterVerify(req: Request, env: CloudflareEnv): Promise<R
     // Re-check uniqueness in case of a race between two concurrent registrations
     const existingByName = await getUserByName(env, challengeRecord.pendingUser.name);
     if (existingByName) {
-      return Response.json({ error: "Username already taken." }, { status: 409, headers: corsHeaders(req, env) });
+      return Response.json({ error: "Registration failed." }, { status: 400, headers: corsHeaders(req, env) });
     }
     user = await createUser(env, challengeRecord.pendingUser.name, challengeRecord.pendingUser.displayName);
   } else {
@@ -326,11 +326,12 @@ async function handleRegisterVerify(req: Request, env: CloudflareEnv): Promise<R
     });
   }
 
-  const token = await createSession(env, user);
+  const session = await createSession(env, user);
   return Response.json(
     {
       verified: true,
-      token,
+      token: session.token,
+      refreshToken: session.refreshToken,
       user: { id: user.id, name: user.name },
     },
     { status: 200, headers: corsHeaders(req, env) }
@@ -447,11 +448,12 @@ async function handleLoginVerify(req: Request, env: CloudflareEnv): Promise<Resp
 
   await updateCounter(env, credential.id, verification.authenticationInfo.newCounter);
 
-  const token = await createSession(env, user);
+  const session = await createSession(env, user);
   return Response.json(
     {
       verified: true,
-      token,
+      token: session.token,
+      refreshToken: session.refreshToken,
       user: { id: user.id, name: user.name },
     },
     { status: 200, headers: corsHeaders(req, env) }
@@ -590,6 +592,28 @@ async function handleDeviceAuthorise(req: Request, env: CloudflareEnv): Promise<
   return Response.json({ ok: true }, { status: 200, headers: corsHeaders(req, env) });
 }
 
+async function handleRefresh(req: Request, env: CloudflareEnv): Promise<Response> {
+  let body: { refreshToken?: string };
+  try {
+    body = (await req.json()) as { refreshToken?: string };
+  } catch {
+    return Response.json({ error: "Invalid request body." }, { status: 400, headers: corsHeaders(req, env) });
+  }
+  if (!body?.refreshToken) {
+    return Response.json({ error: "refreshToken is required." }, { status: 400, headers: corsHeaders(req, env) });
+  }
+
+  const result = await refreshSession(env, body.refreshToken);
+  if (!result) {
+    return Response.json({ error: "Invalid or expired refresh token." }, { status: 401, headers: corsHeaders(req, env) });
+  }
+
+  return Response.json(
+    { token: result.tokens.token, refreshToken: result.tokens.refreshToken, user: result.user },
+    { status: 200, headers: corsHeaders(req, env) }
+  );
+}
+
 async function handleLogout(req: Request, env: CloudflareEnv): Promise<Response> {
   const session = await verifySession(req, env);
   if (session) {
@@ -629,6 +653,10 @@ export default class AuthService extends WorkerEntrypoint<CloudflareEnv> {
 
     if (url.pathname === "/auth/login/verify" && req.method === "POST") {
       return await handleLoginVerify(req, env);
+    }
+
+    if (url.pathname === "/auth/refresh" && req.method === "POST") {
+      return await handleRefresh(req, env);
     }
 
     if (url.pathname === "/auth/logout" && req.method === "POST") {
