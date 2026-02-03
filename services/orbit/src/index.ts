@@ -331,6 +331,8 @@ export class OrbitRelay {
   private clientSockets = new Map<WebSocket, Set<string>>();
   private anchorSockets = new Map<WebSocket, Set<string>>();
   private anchorMeta = new Map<WebSocket, AnchorMeta>();
+  private clientIdToSocket = new Map<string, WebSocket>();
+  private socketToClientId = new Map<WebSocket, string>();
 
   // Thread ID -> subscribed sockets (reverse index for fast routing)
   private threadToClients = new Map<string, Set<WebSocket>>();
@@ -356,11 +358,14 @@ export class OrbitRelay {
     }
     this.userId = userId;
 
+    const url = new URL(req.url);
+    const clientId = role === "client" ? url.searchParams.get("clientId") : null;
+
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
     server.accept();
 
-    this.registerSocket(server, role);
+    this.registerSocket(server, role, clientId);
 
     return new Response(null, {
       status: 101,
@@ -368,9 +373,23 @@ export class OrbitRelay {
     });
   }
 
-  private registerSocket(socket: WebSocket, role: Role): void {
+  private registerSocket(socket: WebSocket, role: Role, clientId: string | null): void {
     const source = role === "client" ? this.clientSockets : this.anchorSockets;
     const direction: Direction = role === "client" ? "client" : "server";
+
+    if (role === "client" && clientId) {
+      const existing = this.clientIdToSocket.get(clientId);
+      if (existing && existing !== socket) {
+        this.removeSocket(existing, "client");
+        try {
+          existing.close(1000, "Replaced by newer connection");
+        } catch {
+          // ignore
+        }
+      }
+      this.clientIdToSocket.set(clientId, socket);
+      this.socketToClientId.set(socket, clientId);
+    }
 
     source.set(socket, new Set());
 
@@ -540,6 +559,16 @@ export class OrbitRelay {
     }
 
     source.delete(socket);
+
+    if (role === "client") {
+      const clientId = this.socketToClientId.get(socket);
+      if (clientId) {
+        this.socketToClientId.delete(socket);
+        if (this.clientIdToSocket.get(clientId) === socket) {
+          this.clientIdToSocket.delete(clientId);
+        }
+      }
+    }
 
     if (role === "anchor") {
       const meta = this.anchorMeta.get(socket);

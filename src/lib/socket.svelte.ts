@@ -4,6 +4,21 @@ import { DEFAULT_WS_URL } from "./config.svelte";
 const HEARTBEAT_INTERVAL = 30_000;
 const HEARTBEAT_TIMEOUT = 10_000;
 const RECONNECT_DELAY = 2_000;
+const CLIENT_ID_KEY = "__zane_client_id__";
+
+function getClientId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const existing = window.sessionStorage.getItem(CLIENT_ID_KEY);
+    if (existing) return existing;
+    const fallback = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const id = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : fallback;
+    window.sessionStorage.setItem(CLIENT_ID_KEY, id);
+    return id;
+  } catch {
+    return null;
+  }
+}
 
 export interface SendResult {
   success: boolean;
@@ -22,6 +37,7 @@ class SocketStore {
   #protocolHandlers = new Set<(msg: Record<string, unknown>) => void>();
   #heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   #heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
+  #reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   #intentionalDisconnect = false;
   #subscribedThreads = new Set<string>();
 
@@ -42,6 +58,7 @@ class SocketStore {
     if (this.#socket) {
       this.#cleanup();
     }
+    this.#clearReconnectTimeout();
 
     const trimmed = url.trim() || DEFAULT_WS_URL;
     this.#url = trimmed;
@@ -53,6 +70,10 @@ class SocketStore {
       const wsUrl = new URL(trimmed);
       if (token) {
         wsUrl.searchParams.set("token", token);
+      }
+      const clientId = getClientId();
+      if (clientId) {
+        wsUrl.searchParams.set("clientId", clientId);
       }
       this.#socket = new WebSocket(wsUrl);
     } catch {
@@ -82,11 +103,7 @@ class SocketStore {
 
       this.status = "reconnecting";
       this.error = event.reason || "Connection lost";
-      setTimeout(() => {
-        if (!this.#intentionalDisconnect) {
-          this.#connect(this.#url, this.#token);
-        }
-      }, RECONNECT_DELAY);
+      this.#scheduleReconnect();
     };
 
     this.#socket.onerror = () => {
@@ -169,7 +186,9 @@ class SocketStore {
   }
 
   reconnect() {
-    if (this.status === "connected") return;
+    if (this.status === "connected" || this.status === "connecting") return;
+    this.#intentionalDisconnect = false;
+    this.#clearReconnectTimeout();
     this.#connect(this.#url, this.#token);
   }
 
@@ -234,7 +253,25 @@ class SocketStore {
     }
   }
 
+  #scheduleReconnect() {
+    if (this.#reconnectTimeout) return;
+    this.#reconnectTimeout = setTimeout(() => {
+      this.#reconnectTimeout = null;
+      if (!this.#intentionalDisconnect) {
+        this.#connect(this.#url, this.#token);
+      }
+    }, RECONNECT_DELAY);
+  }
+
+  #clearReconnectTimeout() {
+    if (this.#reconnectTimeout) {
+      clearTimeout(this.#reconnectTimeout);
+      this.#reconnectTimeout = null;
+    }
+  }
+
   #cleanup() {
+    this.#clearReconnectTimeout();
     this.#stopHeartbeat();
     if (this.#socket) {
       this.#socket.onopen = null;
