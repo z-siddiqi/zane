@@ -2,8 +2,8 @@
     import type { Snippet } from "svelte";
     import type { ConnectionStatus, SandboxMode } from "../types";
     import { socket } from "../socket.svelte";
-    import { config } from "../config.svelte";
-    import { auth } from "../auth.svelte";
+    import { connectionManager } from "../connection-manager.svelte";
+    import { anchors } from "../anchors.svelte";
     import ShimmerDot from "./ShimmerDot.svelte";
 
     interface Props {
@@ -35,6 +35,8 @@
 
     const statusMeta = $derived(statusConfig[status]);
     const selectedSandbox = $derived(sandboxOptions.find((s) => s.value === sandbox) || sandboxOptions[1]);
+    const canReconnect = $derived(status === "error" || status === "disconnected");
+    const showAnchorAlert = $derived(status === "connected" && anchors.status === "none");
 
     function handleClickOutside(e: MouseEvent) {
         const target = e.target as HTMLElement;
@@ -47,19 +49,18 @@
     }
 
     function handleStatusClick() {
-        if (status === "connecting" || status === "connected" || status === "reconnecting") {
-            socket.disconnect();
-        } else {
-            socket.connect(config.url, auth.token);
+        if (canReconnect) {
+            connectionManager.requestConnect();
         }
     }
 
     function getStatusTitle(): string {
-        if (status === "connected") return "Disconnect";
+        if (status === "connected") return "Connected";
         if (status === "connecting") return "Connecting...";
-        if (status === "reconnecting") return "Reconnecting... Click to cancel";
-        if (status === "error" && socket.error) return socket.error;
-        return "Connect";
+        if (status === "reconnecting") return "Reconnecting...";
+        if (status === "error" && socket.error) return `Error: ${socket.error}. Click to reconnect`;
+        if (status === "disconnected") return "Disconnected. Click to connect";
+        return "Connection status";
     }
 </script>
 
@@ -72,8 +73,10 @@
         <button
             type="button"
             class="status-btn row"
+            class:clickable={canReconnect}
             onclick={handleStatusClick}
             title={getStatusTitle()}
+            disabled={!canReconnect}
         >
             {#if status === "connecting" || status === "reconnecting"}
                 <ShimmerDot color={statusMeta.color} />
@@ -85,6 +88,11 @@
         {#if threadId}
             <span class="separator">·</span>
             <span class="thread-id">{threadId.slice(0, 8)}</span>
+        {/if}
+
+        {#if showAnchorAlert}
+            <span class="separator">·</span>
+            <span class="anchor-alert">No device connected</span>
         {/if}
 
         {#if sandbox && onSandboxChange}
@@ -211,7 +219,20 @@
         padding: 0;
         background: transparent;
         border: none;
+        cursor: default;
+    }
+
+    .status-btn.clickable {
         cursor: pointer;
+    }
+
+    .anchor-alert {
+        padding: 0 var(--space-xs);
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--cli-warning);
+        color: var(--cli-warning);
+        font-size: var(--text-xs);
+        line-height: 1.4;
     }
 
     .thread-id {

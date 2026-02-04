@@ -1,7 +1,15 @@
 <script lang="ts">
   import { Router } from "sv-router";
   import AuthGate from "./lib/components/AuthGate.svelte";
+  import { connectionManager } from "./lib/connection-manager.svelte";
+  import { auth } from "./lib/auth.svelte";
   import "./router";
+
+  $effect(() => {
+    if (auth.status === "signed_in") {
+      connectionManager.ensureConnectedOnLoad();
+    }
+  });
 </script>
 
 <AuthGate>

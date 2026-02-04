@@ -1,27 +1,37 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { auth } from "../lib/auth.svelte";
   import { theme } from "../lib/theme.svelte";
+  import { config } from "../lib/config.svelte";
+  import { connectionManager } from "../lib/connection-manager.svelte";
+  import { socket } from "../lib/socket.svelte";
   import AppHeader from "../lib/components/AppHeader.svelte";
   import NotificationSettings from "../lib/components/NotificationSettings.svelte";
-  import { socket } from "../lib/socket.svelte";
+  import { anchors } from "../lib/anchors.svelte";
 
   const themeIcons = { system: "◐", light: "○", dark: "●" } as const;
 
-  interface AnchorInfo {
-    id: string;
-    hostname: string;
-    platform: string;
-    connectedAt: string;
-  }
-
-  let anchors = $state<AnchorInfo[]>([]);
+  const anchorList = $derived(anchors.list);
 
   const platformLabels: Record<string, string> = {
     darwin: "macOS",
     linux: "Linux",
     win32: "Windows",
   };
+
+  const urlLocked = $derived(
+    socket.status === "connected" || socket.status === "connecting" || socket.status === "reconnecting"
+  );
+  const canDisconnect = $derived(
+    socket.status === "connected" || socket.status === "connecting" || socket.status === "reconnecting"
+  );
+  const canConnect = $derived(socket.status === "disconnected" || socket.status === "error");
+  const isSocketConnected = $derived(socket.status === "connected");
+  const connectionActionLabel = $derived.by(() => {
+    if (socket.status === "connecting") return "Cancel";
+    if (socket.status === "reconnecting") return "Stop reconnect";
+    if (socket.status === "connected") return "Disconnect";
+    return "Connect";
+  });
 
   function formatSince(iso: string): string {
     const date = new Date(iso);
@@ -33,33 +43,6 @@
     });
   }
 
-  onMount(() => {
-    if (socket.isHealthy) {
-      socket.requestAnchors();
-    }
-
-    const unsubConnect = socket.onConnect(() => {
-      socket.requestAnchors();
-    });
-
-    const unsubProtocol = socket.onProtocol((msg) => {
-      if (msg.type === "orbit.anchors") {
-        anchors = (msg.anchors as AnchorInfo[]) ?? [];
-      } else if (msg.type === "orbit.anchor-connected") {
-        const anchor = msg.anchor as AnchorInfo;
-        if (!anchors.some((a) => a.id === anchor.id)) {
-          anchors = [...anchors, anchor];
-        }
-      } else if (msg.type === "orbit.anchor-disconnected") {
-        anchors = anchors.filter((a) => a.id !== (msg.anchorId as string));
-      }
-    });
-
-    return () => {
-      unsubConnect();
-      unsubProtocol();
-    };
-  });
 </script>
 
 <div class="settings stack">
@@ -74,16 +57,62 @@
   <div class="content stack">
     <div class="section stack">
       <div class="section-header">
+        <span class="section-title">Connection</span>
+      </div>
+      <div class="section-body stack">
+        <div class="field stack">
+          <label for="orbit-url">orbit url</label>
+          <input
+            id="orbit-url"
+            type="text"
+            bind:value={config.url}
+            placeholder="wss://orbit.example.com/ws/client"
+            disabled={urlLocked}
+          />
+        </div>
+        <div class="connect-actions row">
+          <button
+            class="connect-btn"
+            type="button"
+            onclick={() => {
+              if (canDisconnect) {
+                connectionManager.requestDisconnect();
+              } else if (canConnect) {
+                connectionManager.requestConnect();
+              }
+            }}
+            disabled={!canDisconnect && !canConnect}
+          >
+            {connectionActionLabel}
+          </button>
+        </div>
+        {#if socket.error}
+          <p class="hint hint-error">{socket.error}</p>
+        {/if}
+        <p class="hint">
+          {socket.status === "disconnected"
+            ? "Auto-connect paused. Click Connect to resume."
+            : "Connection is automatic on app load. Disconnect to pause and to change the URL."}
+        </p>
+      </div>
+    </div>
+
+    <div class="section stack">
+      <div class="section-header">
         <span class="section-title">Devices</span>
       </div>
       <div class="section-body stack">
-        {#if anchors.length === 0}
+        {#if !isSocketConnected}
+          <p class="hint">
+            Connect to load devices.
+          </p>
+        {:else if anchorList.length === 0}
           <p class="hint">
             No devices connected. Run <code>zane start</code> in your terminal — a code will appear, then enter it at <a href="/device">/device</a> to authorise.
           </p>
         {:else}
           <ul class="anchor-list">
-            {#each anchors as anchor (anchor.id)}
+            {#each anchorList as anchor (anchor.id)}
               <li class="anchor-item">
                 <span class="anchor-status" title="Connected">●</span>
                 <div class="anchor-info">
@@ -93,9 +122,6 @@
               </li>
             {/each}
           </ul>
-          <p class="hint">
-            To add another device, run <code>zane start</code> and enter the code at <a href="/device">/device</a>.
-          </p>
         {/if}
       </div>
     </div>
@@ -156,6 +182,62 @@
     padding: var(--space-md);
   }
 
+  .field {
+    --stack-gap: var(--space-xs);
+  }
+
+  .field label {
+    color: var(--cli-text-dim);
+    font-size: var(--text-xs);
+    text-transform: lowercase;
+  }
+
+  .field input {
+    padding: var(--space-sm);
+    background: var(--cli-bg);
+    border: 1px solid var(--cli-border);
+    border-radius: var(--radius-sm);
+    color: var(--cli-text);
+    font-family: var(--font-mono);
+  }
+
+  .field input:focus {
+    outline: none;
+    border-color: var(--cli-prefix-agent);
+  }
+
+  .field input:disabled {
+    opacity: 0.6;
+    background: var(--cli-bg-elevated);
+  }
+
+  .connect-actions {
+    align-items: center;
+    gap: var(--space-sm);
+  }
+
+  .connect-btn {
+    padding: var(--space-xs) var(--space-sm);
+    background: transparent;
+    border: 1px solid var(--cli-border);
+    border-radius: var(--radius-sm);
+    color: var(--cli-text);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .connect-btn:hover:enabled {
+    background: var(--cli-bg-hover);
+    border-color: var(--cli-text-muted);
+  }
+
+  .connect-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
   .anchor-list {
     list-style: none;
     margin: 0;
@@ -200,6 +282,10 @@
     font-size: var(--text-xs);
     line-height: 1.5;
     margin: 0;
+  }
+
+  .hint-error {
+    color: var(--cli-error);
   }
 
   .hint code {

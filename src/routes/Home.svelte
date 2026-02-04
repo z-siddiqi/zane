@@ -2,9 +2,7 @@
   import { socket } from "../lib/socket.svelte";
   import { threads } from "../lib/threads.svelte";
   import { models } from "../lib/models.svelte";
-  import { config } from "../lib/config.svelte";
   import { theme } from "../lib/theme.svelte";
-  import { auth } from "../lib/auth.svelte";
   import AppHeader from "../lib/components/AppHeader.svelte";
   import ShimmerDot from "../lib/components/ShimmerDot.svelte";
 
@@ -30,15 +28,6 @@
       sandbox: "danger-full-access",
     },
   } as const;
-
-  function handleConnect() {
-    if (socket.status === "connected") {
-      socket.disconnect();
-      threads.list = [];
-    } else {
-      socket.connect(config.url, auth.token);
-    }
-  }
 
   const RECENT_PROJECTS_KEY = "zane_recent_projects";
 
@@ -159,22 +148,6 @@
     {/snippet}
   </AppHeader>
 
-  <div class="connection stack">
-    <div class="field stack">
-      <label for="url">url</label>
-      <input
-        id="url"
-        type="text"
-        bind:value={config.url}
-        placeholder="ws://localhost:8788/ws"
-        disabled={socket.status === "connected"}
-      />
-    </div>
-    <button class="connect-btn" onclick={handleConnect}>
-      {socket.status === "connected" ? "Disconnect" : "Connect"}
-    </button>
-  </div>
-
   {#if socket.error}
     <div class="error row">
       <span class="error-icon">✗</span>
@@ -185,10 +158,12 @@
   {#if socket.status === "connected"}
     <div class="threads-section stack">
       <div class="section-header split">
-        <span class="section-title">Threads</span>
+        <div class="section-title-row row">
+          <span class="section-title">Threads</span>
+          <button class="refresh-btn" onclick={() => threads.fetch()} title="Refresh">↻</button>
+        </div>
         <div class="section-actions row">
           <button class="new-task-link" type="button" onclick={openTaskModal}>New task</button>
-          <button class="refresh-btn" onclick={() => threads.fetch()} title="Refresh">↻</button>
         </div>
       </div>
 
@@ -315,12 +290,6 @@
     font-size: var(--text-sm);
   }
 
-  .connection {
-    --stack-gap: var(--space-sm);
-    padding: var(--space-md);
-    border-bottom: 1px solid var(--cli-border);
-  }
-
   .field {
     --stack-gap: var(--space-xs);
   }
@@ -346,11 +315,6 @@
     border-color: var(--cli-prefix-agent);
   }
 
-  .field input:disabled {
-    opacity: 0.5;
-    background: var(--cli-bg-elevated);
-  }
-
   .field input::placeholder {
     color: var(--cli-text-muted);
   }
@@ -368,23 +332,6 @@
     width: 1rem;
     height: 1rem;
     accent-color: var(--cli-prefix-agent);
-  }
-
-  .connect-btn {
-    align-self: flex-start;
-    padding: var(--space-sm) var(--space-md);
-    background: var(--cli-prefix-agent);
-    border: none;
-    border-radius: var(--radius-sm);
-    color: var(--cli-bg);
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    cursor: pointer;
-    transition: opacity var(--transition-fast);
-  }
-
-  .connect-btn:hover {
-    opacity: 0.9;
   }
 
   .error {
@@ -528,6 +475,11 @@
     letter-spacing: 0.05em;
   }
 
+  .section-title-row {
+    --row-gap: var(--space-xs);
+    align-items: center;
+  }
+
   .section-actions {
     --row-gap: var(--space-sm);
     padding-right: var(--space-sm);
@@ -633,7 +585,7 @@
   }
 
   .archive-btn {
-    padding: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
     background: transparent;
     border: none;
     color: var(--cli-text-muted);

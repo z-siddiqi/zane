@@ -321,7 +321,7 @@ async function connectOrbit(): Promise<void> {
           ? new TextDecoder().decode(event.data)
           : new TextDecoder().decode(event.data as ArrayBuffer);
 
-    if (text === "pong" || text === '{"type":"pong"}') {
+    if (text === '{"type":"pong"}') {
       if (orbitHeartbeatTimeout) {
         clearTimeout(orbitHeartbeatTimeout);
         orbitHeartbeatTimeout = null;

@@ -625,16 +625,9 @@ export class OrbitRelay {
     if (!payload) return false;
 
     const trimmed = payload.trim();
-    if (trimmed === '{"type":"ping"}' || trimmed === '"ping"') {
+    if (trimmed === '{"type":"ping"}') {
       try {
         socket.send(JSON.stringify({ type: "pong" }));
-      } catch {}
-      return true;
-    }
-
-    if (trimmed === "ping") {
-      try {
-        socket.send("pong");
       } catch {}
       return true;
     }

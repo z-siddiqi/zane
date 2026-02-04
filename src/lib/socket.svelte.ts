@@ -100,7 +100,7 @@ class SocketStore {
     };
 
     this.#socket.onmessage = (event) => {
-      if (event.data === "pong" || event.data === '{"type":"pong"}') {
+      if (event.data === '{"type":"pong"}') {
         this.#clearHeartbeatTimeout();
         return;
       }

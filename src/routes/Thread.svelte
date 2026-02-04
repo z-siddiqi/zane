@@ -168,6 +168,7 @@
     >
         {#snippet actions()}
             <a href={`/thread/${threadId}/review`}>review</a>
+            <a href="/settings">Settings</a>
             <button type="button" onclick={() => theme.cycle()} title="Theme: {theme.current}">
                 {themeIcons[theme.current]}
             </button>
