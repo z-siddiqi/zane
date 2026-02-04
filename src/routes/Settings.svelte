@@ -3,6 +3,7 @@
   import { auth } from "../lib/auth.svelte";
   import { theme } from "../lib/theme.svelte";
   import AppHeader from "../lib/components/AppHeader.svelte";
+  import NotificationSettings from "../lib/components/NotificationSettings.svelte";
   import { socket } from "../lib/socket.svelte";
 
   const themeIcons = { system: "◐", light: "○", dark: "●" } as const;
@@ -64,11 +65,9 @@
 <div class="settings stack">
   <AppHeader status={socket.status}>
     {#snippet actions()}
-      <a href="/">Back</a>
       <button type="button" onclick={() => theme.cycle()} title="Theme: {theme.current}">
         {themeIcons[theme.current]}
       </button>
-      <button type="button" onclick={() => auth.signOut()} title="Sign out">⏻</button>
     {/snippet}
   </AppHeader>
 
@@ -80,24 +79,35 @@
       <div class="section-body stack">
         {#if anchors.length === 0}
           <p class="hint">
-            No devices connected. Run <code>zane start</code> in your terminal to connect an anchor.
+            No devices connected. Run <code>zane start</code> in your terminal — a code will appear, then enter it at <a href="/device">/device</a> to authorise.
           </p>
         {:else}
           <ul class="anchor-list">
             {#each anchors as anchor (anchor.id)}
               <li class="anchor-item">
                 <span class="anchor-status" title="Connected">●</span>
-                <span class="anchor-hostname">{anchor.hostname}</span>
-                <span class="anchor-detail">{platformLabels[anchor.platform] ?? anchor.platform}</span>
-                <span class="anchor-detail anchor-since">since {formatSince(anchor.connectedAt)}</span>
+                <div class="anchor-info">
+                  <span class="anchor-hostname">{anchor.hostname}</span>
+                  <span class="anchor-meta">{platformLabels[anchor.platform] ?? anchor.platform} · since {formatSince(anchor.connectedAt)}</span>
+                </div>
               </li>
             {/each}
           </ul>
+          <p class="hint">
+            To add another device, run <code>zane start</code> and enter the code at <a href="/device">/device</a>.
+          </p>
         {/if}
-        <p class="hint">
-          To connect a new device, run <code>zane start</code> in your terminal.
-          A code will appear — enter it at <a href="/device">/device</a> to authorise.
-        </p>
+      </div>
+    </div>
+
+    <NotificationSettings />
+
+    <div class="section stack">
+      <div class="section-header">
+        <span class="section-title">Account</span>
+      </div>
+      <div class="section-body stack">
+        <button class="sign-out-btn" type="button" onclick={() => auth.signOut()}>Sign out</button>
       </div>
     </div>
   </div>
@@ -157,7 +167,7 @@
 
   .anchor-item {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: var(--space-sm);
     padding: var(--space-xs) 0;
   }
@@ -165,6 +175,14 @@
   .anchor-status {
     font-size: var(--text-xs);
     color: var(--cli-success, #4ade80);
+    margin-top: 2px;
+  }
+
+  .anchor-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
   }
 
   .anchor-hostname {
@@ -172,13 +190,9 @@
     font-weight: 500;
   }
 
-  .anchor-detail {
+  .anchor-meta {
     color: var(--cli-text-muted);
     font-size: var(--text-xs);
-  }
-
-  .anchor-since {
-    margin-left: auto;
   }
 
   .hint {
@@ -197,5 +211,23 @@
 
   .hint a {
     color: var(--cli-prefix-agent);
+  }
+
+  .sign-out-btn {
+    align-self: flex-start;
+    padding: var(--space-xs) var(--space-sm);
+    background: transparent;
+    border: 1px solid var(--cli-border);
+    border-radius: var(--radius-sm);
+    color: var(--cli-error, #ef4444);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .sign-out-btn:hover {
+    background: var(--cli-error-bg);
+    border-color: var(--cli-error, #ef4444);
   }
 </style>

@@ -12,6 +12,7 @@
 
   const { message, disabled = false, latest = false, onApprove }: Props = $props();
 
+  // svelte-ignore state_referenced_locally
   let isOpen = $state(latest);
 
   const status = $derived(message.planStatus ?? "pending");

@@ -256,7 +256,6 @@
             <button type="button" onclick={() => theme.cycle()} title="Theme: {theme.current}">
                 {themeIcons[theme.current]}
             </button>
-            <button type="button" onclick={() => auth.signOut()} title="Sign out">⏻</button>
         {/snippet}
     </AppHeader>
 

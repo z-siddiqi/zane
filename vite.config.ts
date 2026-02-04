@@ -15,5 +15,6 @@ export default defineConfig({
   ],
   define: {
     "import.meta.env.AUTH_URL": JSON.stringify(process.env.AUTH_URL ?? ""),
+    "import.meta.env.VAPID_PUBLIC_KEY": JSON.stringify(process.env.VAPID_PUBLIC_KEY ?? ""),
   },
 });

@@ -67,7 +67,7 @@
 
 <header class="app-header">
     <div class="app-header-inner row">
-        <a href="/" class="brand">zane</a>
+        <a href="/app" class="brand">zane</a>
         <span class="separator">·</span>
         <button
             type="button"
