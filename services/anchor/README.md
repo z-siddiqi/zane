@@ -15,15 +15,20 @@ Requirements:
 - Codex CLI installed and authenticated (`codex login`)
 - `codex app-server` available on PATH
 
-Optional env:
+## Configuration
 
-- `ANCHOR_ORBIT_URL` (e.g. `wss://orbit.<your-domain>.workers.dev/ws/anchor`)
-- `ZANE_ANCHOR_JWT_SECRET` (shared secret for Orbit service-to-service auth)
-- `ANCHOR_JWT_TTL_SEC` (default `300`)
-- `ANCHOR_APP_CWD` (default `process.cwd()`; sent to app-server during init)
-- `ANCHOR_ORBIT_RECONNECT_MS` (default `2000`)
-  Env is loaded from the repo root `.env` via the run scripts.
+Env is loaded from the repo root `.env` via the run scripts.
 
-WebSocket endpoint:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ANCHOR_PORT` | `8788` | Local WebSocket server port |
+| `ANCHOR_ORBIT_URL` | _(empty)_ | Orbit relay URL (e.g. `wss://orbit.<domain>.workers.dev/ws/anchor`) |
+| `AUTH_URL` | _(empty)_ | Auth service URL for device code login |
+| `ZANE_ANCHOR_JWT_SECRET` | _(empty)_ | Shared secret for Orbit service-to-service auth |
+| `ANCHOR_JWT_TTL_SEC` | `300` | JWT token lifetime in seconds |
+| `ANCHOR_APP_CWD` | `process.cwd()` | Working directory sent to app-server during init |
+| `ZANE_CREDENTIALS_FILE` | `~/.zane/credentials.json` | Path to stored login credentials |
+
+## WebSocket endpoint
 
 - `ws://localhost:8788/ws/anchor`
