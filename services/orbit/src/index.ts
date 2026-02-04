@@ -9,6 +9,7 @@ export interface Env {
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
+  ALLOWED_ORIGIN?: string;
   DB?: D1Database;
   ORBIT_DO: DurableObjectNamespace;
 }
@@ -150,16 +151,31 @@ function getRoleFromPath(pathname: string): Role | null {
   return null;
 }
 
-function corsHeaders(origin: string | null): HeadersInit {
-  const allowedOrigin = origin ?? "*";
+function isAllowedOrigin(origin: string | null, env: Env): boolean {
+  if (!origin) return false;
+  try {
+    if (env.ALLOWED_ORIGIN && origin === env.ALLOWED_ORIGIN) return true;
+    const url = new URL(origin);
+    if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function corsHeaders(origin: string | null, env: Env): HeadersInit {
+  const allowedOrigin = isAllowedOrigin(origin, env) ? origin! : "null";
   return {
     "access-control-allow-origin": allowedOrigin,
     "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "access-control-allow-headers": "authorization, content-type",
     "access-control-max-age": "600",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
     vary: "origin",
   };
 }
+
 
 function parseJsonMessage(payload: string): Record<string, unknown> | null {
   const trimmed = payload.trim();
@@ -239,16 +255,16 @@ const STORED_METHODS = new Set([
 
 async function fetchThreadEvents(req: Request, env: Env, origin: string | null, userId: string | null): Promise<Response> {
   if (!env.DB) {
-    return new Response("D1 not configured", { status: 501, headers: corsHeaders(origin) });
+    return new Response("D1 not configured", { status: 501, headers: corsHeaders(origin, env) });
   }
   if (!userId) {
-    return new Response("Unauthorised: missing user identity", { status: 401, headers: corsHeaders(origin) });
+    return new Response("Unauthorised: missing user identity", { status: 401, headers: corsHeaders(origin, env) });
   }
   const url = new URL(req.url);
   const parts = url.pathname.split("/").filter(Boolean);
   const threadId = parts.length === 3 ? parts[1] : null;
   if (!threadId) {
-    return new Response("Not found", { status: 404, headers: corsHeaders(origin) });
+    return new Response("Not found", { status: 404, headers: corsHeaders(origin, env) });
   }
 
   const query = env.DB.prepare("SELECT payload FROM events WHERE thread_id = ? AND user_id = ? ORDER BY id ASC").bind(threadId, userId);
@@ -260,7 +276,7 @@ async function fetchThreadEvents(req: Request, env: Env, origin: string | null, 
     status: 200,
     headers: {
       "content-type": "application/x-ndjson",
-      ...corsHeaders(origin),
+      ...corsHeaders(origin, env),
     },
   });
 }
@@ -277,7 +293,7 @@ export default {
     // CORS preflight for REST APIs
     if (req.method === "OPTIONS") {
       if (url.pathname.startsWith("/threads/") && url.pathname.endsWith("/events")) {
-        return new Response(null, { status: 204, headers: corsHeaders(origin) });
+        return new Response(null, { status: 204, headers: corsHeaders(origin, env) });
       }
     }
 
@@ -285,7 +301,7 @@ export default {
       const authResult = await isAuthorised(req, env);
       if (!authResult.authorised) {
         console.warn(`[orbit] events auth failed: ${url.pathname}`);
-        return new Response("Unauthorised", { status: 401, headers: corsHeaders(origin) });
+        return new Response("Unauthorised", { status: 401, headers: corsHeaders(origin, env) });
       }
       console.log(`[orbit] events request: ${url.pathname}`);
       return fetchThreadEvents(req, env, origin, authResult.userId);

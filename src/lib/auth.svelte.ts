@@ -6,6 +6,7 @@ import type {
 
 const STORE_KEY = "__zane_auth_store__";
 const STORAGE_KEY = "zane_auth_token";
+const REFRESH_STORAGE_KEY = "zane_refresh_token";
 const AUTH_BASE_URL = (import.meta.env.AUTH_URL ?? "").replace(/\/$/, "");
 
 type AuthStatus = "loading" | "signed_out" | "signed_in" | "needs_setup";
@@ -25,7 +26,15 @@ interface AuthSessionResponse {
 interface AuthVerifyResponse {
   verified: boolean;
   token: string;
+  refreshToken?: string;
   user?: AuthUser;
+}
+
+interface RefreshResponse {
+  token: string;
+  refreshToken: string;
+  user?: AuthUser;
+  error?: string;
 }
 
 interface LoginOptionsResponse extends PublicKeyCredentialRequestOptionsJSON {
@@ -50,6 +59,23 @@ async function parseResponse<T>(response: Response): Promise<T | null> {
   }
 }
 
+function base64UrlDecodeToString(value: string): string {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+  return atob(padded);
+}
+
+function decodeJwtPayload(token: string): { exp?: number } | null {
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const json = base64UrlDecodeToString(parts[1]);
+    return JSON.parse(json) as { exp?: number };
+  } catch {
+    return null;
+  }
+}
+
 class AuthStore {
   status = $state<AuthStatus>("loading");
   hasPasskey = $state(false);
@@ -57,6 +83,9 @@ class AuthStore {
   user = $state<AuthUser | null>(null);
   busy = $state(false);
   error = $state<string | null>(null);
+  #refreshToken: string | null = null;
+  #refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  #refreshPromise: Promise<boolean> | null = null;
 
   constructor() {
     this.#loadToken();
@@ -85,11 +114,35 @@ class AuthStore {
       if (data.authenticated && data.user) {
         this.user = data.user;
         this.status = "signed_in";
-      } else {
-        this.token = null;
-        this.#clearToken();
-        this.status = data.systemHasUsers ? "signed_out" : "needs_setup";
+        this.#scheduleRefresh();
+        return;
       }
+
+      if (this.#refreshToken) {
+        const refreshed = await this.tryRefresh();
+        if (refreshed) {
+          const retryResponse = await fetch(apiUrl("/auth/session"), {
+            method: "GET",
+            headers: this.#authHeaders(),
+          });
+          const retryData = await parseResponse<AuthSessionResponse>(retryResponse);
+          if (retryResponse.ok && retryData?.authenticated && retryData.user) {
+            this.hasPasskey = retryData.hasPasskey;
+            this.user = retryData.user;
+            this.status = "signed_in";
+            this.#scheduleRefresh();
+            return;
+          }
+
+          this.status = "signed_in";
+          this.#scheduleRefresh();
+          return;
+        }
+      }
+
+      this.token = null;
+      this.#clearToken();
+      this.status = data.systemHasUsers ? "signed_out" : "needs_setup";
     } catch {
       this.error = "Auth service unavailable.";
       this.status = "signed_out";
@@ -192,11 +245,18 @@ class AuthStore {
 
   #applySession(payload: AuthVerifyResponse): void {
     this.token = payload.token;
+    this.#refreshToken = payload.refreshToken ?? null;
     this.user = payload.user ?? null;
     this.status = "signed_in";
     if (typeof localStorage !== "undefined") {
       localStorage.setItem(STORAGE_KEY, payload.token);
+      if (payload.refreshToken) {
+        localStorage.setItem(REFRESH_STORAGE_KEY, payload.refreshToken);
+      } else {
+        localStorage.removeItem(REFRESH_STORAGE_KEY);
+      }
     }
+    this.#scheduleRefresh();
   }
 
   #authHeaders(): HeadersInit {
@@ -210,11 +270,88 @@ class AuthStore {
     if (stored) {
       this.token = stored;
     }
+    const storedRefresh = localStorage.getItem(REFRESH_STORAGE_KEY);
+    if (storedRefresh) {
+      this.#refreshToken = storedRefresh;
+    }
   }
 
   #clearToken(): void {
+    if (this.#refreshTimer) {
+      clearTimeout(this.#refreshTimer);
+      this.#refreshTimer = null;
+    }
+    this.#refreshToken = null;
     if (typeof localStorage === "undefined") return;
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(REFRESH_STORAGE_KEY);
+  }
+
+  #scheduleRefresh(): void {
+    if (this.#refreshTimer) {
+      clearTimeout(this.#refreshTimer);
+      this.#refreshTimer = null;
+    }
+    if (!this.token) return;
+
+    // Parse JWT exp to schedule refresh 60s before expiry
+    try {
+      const payload = decodeJwtPayload(this.token);
+      if (!payload?.exp) return;
+      const msUntilExpiry = payload.exp * 1000 - Date.now();
+      const refreshIn = Math.max(msUntilExpiry - 60_000, 0);
+      this.#refreshTimer = setTimeout(() => void this.tryRefresh(), refreshIn);
+    } catch {
+      // malformed token, skip scheduling
+    }
+  }
+
+  async tryRefresh(): Promise<boolean> {
+    if (this.#refreshPromise) return this.#refreshPromise;
+    this.#refreshPromise = this.#doRefresh();
+    try {
+      return await this.#refreshPromise;
+    } finally {
+      this.#refreshPromise = null;
+    }
+  }
+
+  async #doRefresh(): Promise<boolean> {
+    if (!this.#refreshToken) return false;
+
+    try {
+      const response = await fetch(apiUrl("/auth/refresh"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ refreshToken: this.#refreshToken }),
+      });
+      const data = await parseResponse<RefreshResponse>(response);
+      if (!response.ok || !data?.token) {
+        // Only sign out on explicit rejection (401). Transient errors (500, 502)
+        // should not clear the session — the current JWT may still be valid.
+        if (response.status === 401) {
+          this.token = null;
+          this.user = null;
+          this.status = "signed_out";
+          this.#clearToken();
+        }
+        return false;
+      }
+
+      this.token = data.token;
+      this.#refreshToken = data.refreshToken;
+      if (data.user) {
+        this.user = data.user;
+      }
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(STORAGE_KEY, data.token);
+        localStorage.setItem(REFRESH_STORAGE_KEY, data.refreshToken);
+      }
+      this.#scheduleRefresh();
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

@@ -36,6 +36,8 @@ export function corsHeaders(req: Request, env: CloudflareEnv): HeadersInit {
     "access-control-allow-methods": "GET, POST, OPTIONS",
     "access-control-allow-headers": "authorization, content-type",
     "access-control-max-age": "600",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
     vary: "origin",
   };
 }
