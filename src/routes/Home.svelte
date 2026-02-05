@@ -4,6 +4,7 @@
   import { models } from "../lib/models.svelte";
   import { theme } from "../lib/theme.svelte";
   import AppHeader from "../lib/components/AppHeader.svelte";
+  import ProjectPicker from "../lib/components/ProjectPicker.svelte";
   import ShimmerDot from "../lib/components/ShimmerDot.svelte";
 
   const themeIcons = { system: "◐", light: "○", dark: "●" } as const;
@@ -29,42 +30,12 @@
     },
   } as const;
 
-  const RECENT_PROJECTS_KEY = "zane_recent_projects";
-
-  function loadRecentProjects(): string[] {
-    try {
-      const raw = localStorage.getItem(RECENT_PROJECTS_KEY);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw) as string[];
-      return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
-    } catch {
-      return [];
-    }
-  }
-
-  function saveRecentProjects(list: string[]) {
-    try {
-      localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(list));
-    } catch {
-      // ignore
-    }
-  }
-
-  function addRecentProject(path: string, list: string[]) {
-    const trimmed = path.trim();
-    if (!trimmed) return list;
-    const next = [trimmed, ...list.filter((item) => item !== trimmed)].slice(0, 8);
-    saveRecentProjects(next);
-    return next;
-  }
-
   let showTaskModal = $state(false);
   let taskNote = $state("");
   let taskProject = $state("");
   let taskModel = $state("");
   let taskPlanFirst = $state(true);
   let permissionLevel = $state<keyof typeof permissionPresets>("standard");
-  let recentProjects = $state(loadRecentProjects());
   let isCreating = $state(false);
 
   // Default to first available model
@@ -93,8 +64,6 @@
 
     isCreating = true;
     try {
-      recentProjects = addRecentProject(taskProject, recentProjects);
-
       const preset = permissionPresets[permissionLevel];
       threads.start(taskProject, taskNote, {
         approvalPolicy: preset.approvalPolicy,
@@ -215,29 +184,7 @@
 
         <div class="field stack">
           <label for="task-project">project</label>
-          <input
-            id="task-project"
-            type="text"
-            bind:value={taskProject}
-            placeholder="/path/to/project"
-            list="recent-projects"
-          />
-          {#if recentProjects.length > 0}
-            <datalist id="recent-projects">
-              {#each recentProjects as project}
-                <option value={project}></option>
-              {/each}
-            </datalist>
-          {/if}
-          {#if recentProjects.length > 0}
-            <div class="recent-projects">
-              {#each recentProjects as project}
-                <button type="button" class="recent-chip" onclick={() => (taskProject = project)}>
-                  {project}
-                </button>
-              {/each}
-            </div>
-          {/if}
+          <ProjectPicker bind:value={taskProject} />
         </div>
 
         <div class="field stack">
@@ -299,7 +246,6 @@
     font-size: var(--text-xs);
   }
 
-  .field input,
   .field select {
     padding: var(--space-sm);
     background: var(--cli-bg);
@@ -309,14 +255,9 @@
     font-family: var(--font-mono);
   }
 
-  .field input:focus,
   .field select:focus {
     outline: none;
     border-color: var(--cli-prefix-agent);
-  }
-
-  .field input::placeholder {
-    color: var(--cli-text-muted);
   }
 
   .checkbox-field {
@@ -444,22 +385,6 @@
   .primary-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
-  }
-
-  .recent-projects {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-xs);
-  }
-
-  .recent-chip {
-    padding: 2px 8px;
-    border-radius: 999px;
-    border: 1px solid var(--cli-border);
-    background: transparent;
-    color: var(--cli-text-muted);
-    font-size: var(--text-xs);
-    cursor: pointer;
   }
 
   .section-header {
