@@ -1,4 +1,6 @@
-import { hostname } from "node:os";
+import { hostname, homedir } from "node:os";
+import { readdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { WsClient } from "./types";
 
 const PORT = Number(process.env.ANCHOR_PORT ?? 8788);
@@ -35,6 +37,25 @@ const APPROVAL_METHODS = new Set([
 ]);
 const pendingApprovals = new Map<string, string>(); // threadId → raw JSON line
 const approvalRpcIds = new Map<number | string, string>(); // rpcId → threadId (for cleanup on response)
+
+async function handleListDirs(
+  id: number | string,
+  params: JsonObject | null,
+): Promise<JsonObject> {
+  const raw = params?.path;
+  const targetPath = typeof raw === "string" && raw.trim() ? raw.trim() : homedir();
+  try {
+    const entries = await readdir(targetPath, { withFileTypes: true });
+    const dirs = entries
+      .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b));
+    return { id, result: { dirs, parent: dirname(targetPath), current: targetPath } };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to list directory";
+    return { id, error: { code: -1, message } };
+  }
+}
 
 function ensureAppServer(): void {
   if (appServer || appServerStarting) return;
@@ -377,8 +398,18 @@ async function connectOrbit(): Promise<void> {
       // Not JSON, continue
     }
 
-    ensureAppServer();
+    // Handle anchor-local RPC methods from orbit-relayed messages
     const message = parseJsonRpcMessage(text);
+    if (message && message.method === "anchor.listDirs" && message.id != null) {
+      void handleListDirs(message.id as number | string, asRecord(message.params)).then((resp) => {
+        if (orbitSocket && orbitSocket.readyState === WebSocket.OPEN) {
+          try { orbitSocket.send(JSON.stringify(resp)); } catch { /* ignore */ }
+        }
+      });
+      return;
+    }
+
+    ensureAppServer();
     if (message && ("method" in message || "id" in message)) {
       // Auto-subscribe to threads from orbit messages
       const threadId = extractThreadId(message);
@@ -589,7 +620,7 @@ const server = Bun.serve({
         platform: process.platform,
       }));
     },
-    message(_ws, message) {
+    message(ws, message) {
       const text = typeof message === "string" ? message : new TextDecoder().decode(message);
 
       // Forward orbit protocol messages (push-subscribe, push-test, etc.) to orbit
@@ -605,9 +636,17 @@ const server = Bun.serve({
         // not JSON — fall through to app-server path
       }
 
+      // Handle anchor-local RPC methods
+      const parsed = parseJsonRpcMessage(text);
+      if (parsed && parsed.method === "anchor.listDirs" && parsed.id != null) {
+        void handleListDirs(parsed.id as number | string, asRecord(parsed.params)).then((resp) => {
+          try { (ws as WsClient).send(JSON.stringify(resp)); } catch { /* ignore */ }
+        });
+        return;
+      }
+
       ensureAppServer();
       if (!appServer) return;
-      const parsed = parseJsonRpcMessage(text);
       if (parsed && ("method" in parsed || "id" in parsed)) {
         sendToAppServer(text.trim() + "\n");
       }

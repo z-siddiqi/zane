@@ -2,6 +2,7 @@
     import { socket } from "../lib/socket.svelte";
     import { threads } from "../lib/threads.svelte";
     import AppHeader from "../lib/components/AppHeader.svelte";
+    import ProjectPicker from "../lib/components/ProjectPicker.svelte";
 
     const permissionPresets = {
         cautious: {
@@ -59,7 +60,7 @@
                     <div class="form-title">New task</div>
                     <div class="task-field stack">
                         <label for="task-dir">directory</label>
-                        <input id="task-dir" type="text" bind:value={taskDir} placeholder="Working directory path..." />
+                        <ProjectPicker bind:value={taskDir} placeholder="Working directory path..." />
                     </div>
                     <div class="task-field stack">
                         <label for="task-summary">task</label>
@@ -143,7 +144,6 @@
         font-size: var(--text-xs);
     }
 
-    .task-field input,
     .task-field textarea,
     .task-field select {
         padding: var(--space-sm);
@@ -156,14 +156,12 @@
         resize: vertical;
     }
 
-    .task-field input:focus,
     .task-field textarea:focus,
     .task-field select:focus {
         outline: none;
         border-color: var(--cli-prefix-agent);
     }
 
-    .task-field input::placeholder,
     .task-field textarea::placeholder {
         color: var(--cli-text-muted);
     }

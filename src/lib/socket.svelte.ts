@@ -23,6 +23,12 @@ export interface SendResult {
   error?: string;
 }
 
+export interface ListDirsResult {
+  dirs: string[];
+  parent: string;
+  current: string;
+}
+
 class SocketStore {
   status = $state<ConnectionStatus>("disconnected");
   error = $state<string | null>(null);
@@ -38,6 +44,8 @@ class SocketStore {
   #reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   #intentionalDisconnect = false;
   #subscribedThreads = new Set<string>();
+  #rpcIdCounter = 0;
+  #pendingRpc = new Map<number | string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 
   get url() {
     return this.#url;
@@ -139,6 +147,20 @@ class SocketStore {
           return;
         }
 
+        // Resolve pending RPC responses (anchor.listDirs etc.)
+        const rpcId = msg.id as number | string | undefined;
+        if (rpcId != null && this.#pendingRpc.has(rpcId)) {
+          const { resolve, reject } = this.#pendingRpc.get(rpcId)!;
+          this.#pendingRpc.delete(rpcId);
+          if (msg.error) {
+            const errObj = msg.error as Record<string, unknown>;
+            reject(new Error(typeof errObj.message === "string" ? errObj.message : "RPC error"));
+          } else {
+            resolve(msg.result);
+          }
+          return;
+        }
+
         for (const handler of this.#messageHandlers) {
           handler(msg as RpcMessage);
         }
@@ -187,6 +209,21 @@ class SocketStore {
 
   requestAnchors(): SendResult {
     return this.#sendRaw({ type: "orbit.list-anchors" });
+  }
+
+  listDirs(path?: string): Promise<ListDirsResult> {
+    const id = `dir-${++this.#rpcIdCounter}`;
+    return new Promise((resolve, reject) => {
+      this.#pendingRpc.set(id, {
+        resolve: (v) => resolve(v as ListDirsResult),
+        reject,
+      });
+      const result = this.send({ id, method: "anchor.listDirs", params: { path: path ?? "" } });
+      if (!result.success) {
+        this.#pendingRpc.delete(id);
+        reject(new Error(result.error ?? "Not connected"));
+      }
+    });
   }
 
   reconnect() {
@@ -277,6 +314,10 @@ class SocketStore {
   #cleanup() {
     this.#clearReconnectTimeout();
     this.#stopHeartbeat();
+    for (const [, { reject }] of this.#pendingRpc) {
+      reject(new Error("Connection closed"));
+    }
+    this.#pendingRpc.clear();
     if (this.#socket) {
       this.#socket.onopen = null;
       this.#socket.onclose = null;
