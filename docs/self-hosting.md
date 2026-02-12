@@ -19,7 +19,7 @@ The wizard deploys two services to your Cloudflare account:
 | **Orbit** | Cloudflare Worker + Durable Object | Passkey auth, JWT issuance, WebSocket relay between devices and Anchor |
 | **Web** | Cloudflare Pages | Static Svelte frontend |
 
-It also creates a shared **D1 database** (SQLite) for auth sessions, passkey credentials, and event storage.
+It also creates a shared **D1 database** (SQLite) for auth sessions and passkey credentials.
 
 Orbit uses two generated JWT secrets (`ZANE_WEB_JWT_SECRET` and `ZANE_ANCHOR_JWT_SECRET`) that are set as Cloudflare secrets automatically.
 

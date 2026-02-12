@@ -1,15 +1,8 @@
 # Zane
 
-**Remote control for your local Codex.**
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)]()
+Zane lets you monitor and control [Codex CLI](https://github.com/openai/codex) sessions running on your Mac from your phone, tablet, or any browser. Start tasks, watch real-time output, approve file writes, and review diffs from a handheld web client while your agent runs locally.
 
 <img src="docs/assets/demo.gif" alt="Zane demo" width="320" />
-
-## What is Zane?
-
-Zane lets you monitor and control [Codex CLI](https://github.com/openai/codex) sessions running on your Mac from your phone, tablet, or any browser. Start tasks, watch real-time output, approve file writes, and review diffs from a handheld web client while your agent runs locally.
 
 ## Features
 
@@ -18,6 +11,7 @@ Zane lets you monitor and control [Codex CLI](https://github.com/openai/codex) s
 - **Approve or deny** -- handle permission prompts from anywhere
 - **Review diffs** -- inspect code changes per turn before they land
 - **Plan mode** -- review and approve plans before the agent writes code
+- **Push notifications** -- get notified on your phone for approvals and important session events
 - **No port forwarding** -- Anchor connects outbound to Cloudflare; no open ports on your Mac
 - **Passkey auth** -- WebAuthn passkeys, no passwords
 - **Self-host option** -- deploy the entire stack to your own Cloudflare account
@@ -40,7 +34,12 @@ Zane lets you monitor and control [Codex CLI](https://github.com/openai/codex) s
    Codex app-server
 ```
 
-**Anchor** is a lightweight daemon on your Mac that spawns `codex app-server` and relays structured JSON-RPC messages. **Orbit** is a Cloudflare Worker + Durable Object that handles passkey auth and relays WebSocket traffic between your devices and Anchor. The **web client** is a static Svelte app on Cloudflare Pages.
+**Anchor** is a lightweight daemon on your Mac that spawns `codex app-server` and relays structured JSON-RPC messages. **Orbit** is a Cloudflare Worker + Durable Object that handles passkey auth, push notification fan-out, and WebSocket relay between your devices and Anchor. The **web client** is a static Svelte app on Cloudflare Pages.
+
+## Deployment modes
+
+- Default: managed Orbit control plane (no Cloudflare setup required).
+- Optional: full self-host on your own Cloudflare account via `zane self-host`.
 
 ## Quick start
 
@@ -62,7 +61,14 @@ curl -fsSL https://raw.githubusercontent.com/z-siddiqi/zane/main/install.sh | ba
 zane start
 ```
 
-On first run, a device code appears in your terminal and a browser window opens. Authenticate with your passkey, then Anchor connects to Orbit and is ready to receive commands from the web client.
+On first run:
+
+1. A device code appears in your terminal.
+2. A browser window opens for authentication.
+3. You sign in with your passkey.
+4. Anchor connects to Orbit and is ready for commands from the web client.
+
+By default, this uses the managed Orbit control plane. Use `zane self-host` first if you want your own Cloudflare deployment.
 
 ## CLI
 
@@ -76,7 +82,7 @@ On first run, a device code appears in your terminal and a browser window opens.
 | `zane self-host` | Deploy to your own Cloudflare account |
 | `zane uninstall` | Remove Zane |
 
-## Self-hosting
+## Self-hosting (optional)
 
 Zane can be fully self-hosted on your own Cloudflare account:
 

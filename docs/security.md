@@ -3,7 +3,7 @@
 ## Threat Model
 - Unauthorized remote control of the local machine.
 - Session hijacking or replay via leaked JWT or refresh token.
-- Exposure of sensitive data in logs, prompts, or persisted events.
+- Exposure of sensitive data in logs or prompts.
 - Abuse of the Anchor local API (if reachable beyond localhost).
 
 ## Baseline Controls
@@ -39,13 +39,12 @@
 - Approval requests are exposed to the client in real time.
 
 ### Logging & Persistence
-- Orbit persists selected event types (turns, diffs, approvals, user input) to a D1 `events` table.
 - Cloudflare Workers observability is enabled — `console.log` output goes to Cloudflare's logging infrastructure.
 - No application-level secret redaction is implemented.
 - Avoid sending environment variables or local file contents unless requested.
 
 ### Data Isolation
-- Orbit creates one Durable Object per `userId` and filters persisted events by `user_id`.
+- Orbit creates one Durable Object per `userId`.
 - Push notification subscriptions (endpoint, keys) are stored per user in D1.
 
 ### Security Headers
@@ -69,7 +68,6 @@
 
 ## Planned Improvements
 - Bind Anchor local API to `127.0.0.1` and add authentication to the local WebSocket.
-- Implement secret redaction in logs and persisted events.
 - Optional E2E encryption using per-session keys.
 - Cloudflare Access policy for extra protection.
 - Rate limiting on auth and WebSocket endpoints.

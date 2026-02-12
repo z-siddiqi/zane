@@ -5,7 +5,7 @@ This app uses passkeys for user authentication and JWTs for service-to-service a
 ## Components
 
 - Web client (Svelte)
-- Orbit (Cloudflare Worker + Durable Object) for passkey auth, WS relay, and event storage
+- Orbit (Cloudflare Worker + Durable Object) for passkey auth and WS relay
 - Anchor (local Bun service) bridging Orbit to `codex app-server`
 
 ## JWTs and secrets
@@ -43,9 +43,7 @@ User JWTs are also stored server-side in `auth_sessions` for revocation and expi
 
 1) Client connects to Orbit WS using:
    - `wss://.../ws/client?token=<jwt>`
-2) Client fetches events with:
-   - `Authorization: Bearer <jwt>` to `GET /threads/:id/events`
-3) Orbit verifies the JWT (issuer `zane-auth`, audience `zane-web`).
+2) Orbit verifies the JWT (issuer `zane-auth`, audience `zane-web`).
 
 ### Anchor to Orbit
 
@@ -82,7 +80,7 @@ Client:
 ## Common issues
 
 - `Orbit unavailable` in the client: `PASSKEY_ORIGIN` does not match your web origin, or `AUTH_URL` is incorrect.
-- `401` from Orbit WS/events: mismatched or missing JWT secret.
+- `401` from Orbit WS: mismatched or missing JWT secret.
 - `Not initialized` JSON-RPC errors: app-server did not receive `initialize` or rejected params.
 - Wrong project files: `ANCHOR_APP_CWD` set to the wrong path.
 

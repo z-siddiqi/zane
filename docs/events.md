@@ -159,14 +159,3 @@ Each question: `{ id, header, question, isOther?, isSecret?, options?: [{ label,
   divider (not a collapsible tool block).
 - **Collaboration mode** auto-syncs to `"plan"` when an unapproved plan item
   exists, and resets to `"code"` when the user approves or manually toggles.
-
-## Event Persistence (Orbit)
-
-Only a subset of events are persisted to D1 for reconnection/audit. All other
-events are relayed in real-time but not stored.
-
-**Stored events** (see `STORED_METHODS` in `services/orbit/src/index.ts`):
-- `turn/start`
-- `turn/started`
-- `turn/diff/updated`
-- `item/started`

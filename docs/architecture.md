@@ -40,7 +40,6 @@ Responsibilities:
 - Authenticate clients (via user JWT) and Anchor (via service JWT).
 - Create a Durable Object per user (`idFromName(userId)`). All threads for a user share one DO.
 - Relay WebSocket messages between Anchor and client, routed by thread subscription.
-- Store thread events in D1 for reconnection and review (scoped by `user_id`).
 
 Tech:
 - Cloudflare Workers + Durable Objects + D1.
@@ -51,7 +50,6 @@ Responsibilities:
 - Authenticate via passkeys.
 - Show list of threads and live output.
 - Send approvals and input.
-- Review code changes per turn.
 - Reconnect on network loss.
 
 Tech:
@@ -65,7 +63,7 @@ Hosting:
 ### A) Authentication
 1. Client registers/logs in via passkey at Orbit auth endpoints.
 2. Orbit returns a JWT (stored in localStorage).
-3. Client uses JWT to connect to Orbit and fetch events.
+3. Client uses JWT to connect to Orbit.
 
 ### B) Session (from Web Client)
 1. Client connects to Orbit WebSocket with JWT.
@@ -75,7 +73,6 @@ Hosting:
 5. Client sends `thread/start` and `turn/start` JSON-RPC calls.
 6. DO forwards JSON-RPC to Anchor; Anchor relays to `codex app-server`.
 7. App-server notifications are routed back to clients subscribed to the thread.
-8. Orbit stores selected events in D1 for reconnection and review.
 
 ### C) Approval Flow
 1. `codex app-server` emits `item/*/requestApproval` JSON-RPC request.
@@ -108,9 +105,6 @@ WebSocket endpoint for the web client. Requires JWT with `zane-web` audience.
 
 ### `GET /ws/anchor`
 WebSocket endpoint for Anchor. Requires JWT with `zane-orbit-anchor` audience.
-
-### `GET /threads/:id/events`
-Fetch stored events for a thread (used for reconnection and review). Scoped by `user_id` from JWT.
 
 ## Auth Endpoints (served by Orbit)
 
@@ -151,7 +145,6 @@ The `OrbitRelay` DO manages all sockets for a single user. Internal state:
 - `anchorSockets` — map of Anchor WebSockets to their subscribed thread IDs
 - `anchorMeta` — metadata (hostname, platform, connection time) per Anchor socket
 - `threadToClients` / `threadToAnchors` — reverse index for fast thread-scoped routing
-- Events stored in D1, scoped by `thread_id` and `user_id`
 
 ## Security
 - Passkey auth for users (WebAuthn).

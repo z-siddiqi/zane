@@ -17,7 +17,6 @@ bun run dev
 - `POST /auth/*` (passkey + device code flows)
 - `GET /ws/client`
 - `GET /ws/anchor`
-- `GET /threads/:id/events` (NDJSON, requires D1)
 
 ## Auth
 
@@ -31,10 +30,7 @@ For Anchor service-to-service auth, set `ZANE_ANCHOR_JWT_SECRET` and use a JWT w
 - `iss: "zane-anchor"`
 - `aud: "zane-orbit-anchor"`
 
-## D1 events storage
-
-Orbit can persist JSON-RPC events to D1 and serves them via
-`GET /threads/:id/events`.
+## D1 setup
 
 Setup:
 

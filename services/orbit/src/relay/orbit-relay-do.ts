@@ -1,19 +1,6 @@
 import { sendPush, type PushPayload, type VapidKeys } from "../push";
-import type { Direction, Env, Role } from "../types";
-import { asRecord, extractMethod, extractThreadId, extractTurnId, parseJsonMessage } from "../utils/protocol";
-
-const STORED_METHODS = new Set([
-  "turn/start",
-  "turn/started",
-  "turn/completed",
-  "turn/diff/updated",
-  "item/started",
-  "item/completed",
-  "item/fileChange/requestApproval",
-  "item/commandExecution/requestApproval",
-  "item/mcpToolCall/requestApproval",
-  "item/tool/requestUserInput",
-]);
+import type { Env, Role } from "../types";
+import { asRecord, extractMethod, extractThreadId, parseJsonMessage } from "../utils/protocol";
 
 interface AnchorMeta {
   id: string;
@@ -25,9 +12,6 @@ interface AnchorMeta {
 export class OrbitRelay {
   private env: Env;
   private userId: string | null = null;
-
-  // Track rpcIds from approval/user-input requests so we can store their responses
-  private pendingRequestRpcIds = new Map<string | number, { threadId: string; method: string }>();
 
   // Socket -> subscribed thread IDs
   private clientSockets = new Map<WebSocket, Set<string>>();
@@ -77,7 +61,6 @@ export class OrbitRelay {
 
   private registerSocket(socket: WebSocket, role: Role, clientId: string | null): void {
     const source = role === "client" ? this.clientSockets : this.anchorSockets;
-    const direction: Direction = role === "client" ? "client" : "server";
 
     if (role === "client" && clientId) {
       const existing = this.clientIdToSocket.get(clientId);
@@ -119,7 +102,6 @@ export class OrbitRelay {
         return;
       }
 
-      this.logEvent(event.data, direction);
       this.routeMessage(socket, role, event.data, parsed);
     });
 
@@ -535,73 +517,4 @@ export class OrbitRelay {
     }
   }
 
-  private async logEvent(data: unknown, direction: Direction): Promise<void> {
-    if (!this.env.DB) return;
-
-    const payloadStr = this.dataToString(data);
-    if (!payloadStr) return;
-
-    const message = parseJsonMessage(payloadStr);
-    if (!message) return;
-
-    // Skip storage for replayed messages (e.g. re-sent approvals from anchor)
-    if (message._replay) return;
-
-    const method = extractMethod(message);
-    let threadId = extractThreadId(message);
-    let storeMethod = method;
-
-    // Track rpcIds from approval/user-input requests for response matching
-    if (method && message.id != null && threadId) {
-      if (method.endsWith("/requestApproval") || method === "item/tool/requestUserInput") {
-        this.pendingRequestRpcIds.set(message.id as string | number, { threadId, method });
-      }
-    }
-
-    // Clean up tracked request rpcIds when a turn completes
-    if (method === "turn/completed" && threadId) {
-      for (const [rpcId, info] of this.pendingRequestRpcIds) {
-        if (info.threadId === threadId) this.pendingRequestRpcIds.delete(rpcId);
-      }
-    }
-
-    // Match client responses (no method, has id + result) to tracked requests
-    if (!method && message.id != null && message.result != null) {
-      const pending = this.pendingRequestRpcIds.get(message.id as string | number);
-      if (pending) {
-        this.pendingRequestRpcIds.delete(message.id as string | number);
-        threadId = pending.threadId;
-        storeMethod = pending.method + "/response";
-      }
-    }
-
-    if (!threadId) return;
-    if (!storeMethod || (!STORED_METHODS.has(storeMethod) && !storeMethod.endsWith("/response"))) return;
-
-    const turnId = extractTurnId(message);
-    const entry = {
-      ts: new Date().toISOString(),
-      direction,
-      message,
-    };
-
-    try {
-      await this.env.DB.prepare(
-        "INSERT INTO events (thread_id, user_id, turn_id, direction, role, method, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-      )
-        .bind(
-          threadId,
-          this.userId,
-          turnId,
-          direction,
-          direction === "client" ? "client" : "anchor",
-          storeMethod,
-          JSON.stringify(entry),
-          Math.floor(Date.now() / 1000)
-        )
-        .run();
-    } catch (err) {
-      console.warn("[orbit] failed to log event", err);
-    }
-  }
 }
