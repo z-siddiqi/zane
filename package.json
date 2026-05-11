@@ -8,6 +8,9 @@
     "preview": "bunx --bun vite preview --port 4173",
     "deploy": "bun run build && bunx wrangler pages deploy dist --project-name zane --branch main",
     "migrate": "bunx wrangler d1 migrations apply zane --remote",
+    "typecheck": "bunx --bun tsc --noEmit && bunx --bun tsc --noEmit -p services/anchor/tsconfig.json && bunx --bun tsc --noEmit -p services/orbit/tsconfig.json",
+    "codex:smoke": "bun bin/codex-app-server-smoke.ts",
+    "check": "bun run typecheck && bun run lint && bun run build",
     "lint": "oxlint .",
     "lint:fix": "oxlint --fix .",
     "prepare": "husky"

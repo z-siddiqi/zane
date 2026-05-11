@@ -128,7 +128,13 @@ cmd_doctor() {
 
   # Check codex
   if command -v codex &>/dev/null; then
-    pass "codex CLI installed"
+    local codex_version
+    codex_version=$(codex --version 2>/dev/null | head -n 1 || true)
+    if [[ -n "$codex_version" ]]; then
+      pass "codex CLI installed ($codex_version)"
+    else
+      pass "codex CLI installed"
+    fi
   else
     fail "codex CLI not installed"
     has_error=1
@@ -140,6 +146,17 @@ cmd_doctor() {
   else
     fail "Anchor service not found at $ANCHOR_DIR"
     has_error=1
+  fi
+
+  # Check app-server protocol handshake
+  if command -v bun &>/dev/null && command -v codex &>/dev/null && [[ -f "$ZANE_HOME/bin/codex-app-server-smoke.ts" ]]; then
+    if ZANE_SMOKE_TIMEOUT_MS=10000 bun "$ZANE_HOME/bin/codex-app-server-smoke.ts" &>/dev/null; then
+      pass "codex app-server initializes"
+    else
+      fail "codex app-server failed to initialize"
+      info "  Run: bun $ZANE_HOME/bin/codex-app-server-smoke.ts"
+      has_error=1
+    fi
   fi
 
   # Check node_modules
