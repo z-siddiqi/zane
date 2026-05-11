@@ -147,7 +147,7 @@ class MessagesStore {
     return null;
   }
 
-  approve(approvalId: string, forSession = false, collaborationMode?: CollaborationMode) {
+  approve(approvalId: string, forSession = false, _collaborationMode?: CollaborationMode) {
     const approval = this.#pendingApprovals.get(approvalId);
     if (!approval || approval.status !== "pending") return;
 
@@ -155,15 +155,13 @@ class MessagesStore {
     this.#pendingApprovals = new Map(this.#pendingApprovals);
     this.#updateApprovalInMessages(approvalId, "approved");
 
-    // Send JSON-RPC response with decision enum per Codex protocol (lowercase!)
-    const decision = forSession ? "acceptForSession" : "accept";
     socket.send({
       id: approval.rpcId,
-      result: { decision, ...(collaborationMode ? { collaborationMode } : {}) },
+      result: this.#approvalAcceptResult(approval, forSession),
     });
   }
 
-  decline(approvalId: string, collaborationMode?: CollaborationMode) {
+  decline(approvalId: string, _collaborationMode?: CollaborationMode) {
     const approval = this.#pendingApprovals.get(approvalId);
     if (!approval || approval.status !== "pending") return;
 
@@ -171,10 +169,9 @@ class MessagesStore {
     this.#pendingApprovals = new Map(this.#pendingApprovals);
     this.#updateApprovalInMessages(approvalId, "declined");
 
-    // Decline = deny but let agent continue
     socket.send({
       id: approval.rpcId,
-      result: { decision: "decline", ...(collaborationMode ? { collaborationMode } : {}) },
+      result: this.#approvalRejectResult(approval, "decline"),
     });
   }
 
@@ -186,11 +183,54 @@ class MessagesStore {
     this.#pendingApprovals = new Map(this.#pendingApprovals);
     this.#updateApprovalInMessages(approvalId, "cancelled");
 
-    // Cancel = deny and interrupt turn
     socket.send({
       id: approval.rpcId,
-      result: { decision: "cancel" },
+      result: this.#approvalRejectResult(approval, "cancel"),
     });
+  }
+
+  #approvalAcceptResult(approval: ApprovalRequest, forSession: boolean): Record<string, unknown> {
+    if (approval.method === "item/permissions/requestApproval") {
+      return {
+        permissions: this.#grantedPermissions(approval.requestedPermissions),
+        scope: forSession ? "session" : "turn",
+      };
+    }
+
+    if (approval.method === "mcpServer/elicitation/request") {
+      return { action: "accept", content: {}, _meta: null };
+    }
+
+    return { decision: forSession ? "acceptForSession" : "accept" };
+  }
+
+  #approvalRejectResult(approval: ApprovalRequest, action: "decline" | "cancel"): Record<string, unknown> {
+    if (approval.method === "item/permissions/requestApproval") {
+      return { permissions: {}, scope: "turn" };
+    }
+
+    if (approval.method === "mcpServer/elicitation/request") {
+      return { action, content: null, _meta: null };
+    }
+
+    return { decision: action };
+  }
+
+  #grantedPermissions(requestedPermissions: Record<string, unknown> | undefined): Record<string, unknown> {
+    if (!requestedPermissions) return {};
+
+    const granted: Record<string, unknown> = {};
+    const network = requestedPermissions.network;
+    const fileSystem = requestedPermissions.fileSystem ?? requestedPermissions.file_system;
+
+    if (network && typeof network === "object") {
+      granted.network = network;
+    }
+    if (fileSystem && typeof fileSystem === "object") {
+      granted.fileSystem = fileSystem;
+    }
+
+    return granted;
   }
 
   respondToUserInput(messageId: string, answers: Record<string, string[]>, collaborationMode?: CollaborationMode) {
@@ -638,7 +678,7 @@ class MessagesStore {
 
     // User input requests (plan mode questions)
     if (method === "item/tool/requestUserInput") {
-      const rpcId = msg.id as number;
+      const rpcId = msg.id as number | string;
       const itemId = (params.itemId as string) || (params.item_id as string) || `user-input-${Date.now()}`;
       const questions = (params.questions as UserInputQuestion[]) || [];
 
@@ -669,7 +709,7 @@ class MessagesStore {
 
     // MCP server elicitation request (form input)
     if (method === "mcpServer/elicitation/request") {
-      const rpcId = msg.id as number;
+      const rpcId = msg.id as number | string;
       const itemId = `elicitation-${rpcId}`;
       const serverName = (params.serverName as string) || "MCP Server";
       const request = params.request as { message?: string } | undefined;
@@ -680,6 +720,7 @@ class MessagesStore {
       const approval: ApprovalRequest = {
         id: itemId,
         rpcId,
+        method,
         type: "elicitation",
         description,
         toolName: serverName,
@@ -707,9 +748,9 @@ class MessagesStore {
 
     // Approval requests (file changes, commands, etc.)
     if (method?.includes("/requestApproval")) {
-      const itemId = (params.itemId as string) || `approval-${Date.now()}`;
+      const itemId = (params.approvalId as string) || (params.itemId as string) || `approval-${Date.now()}`;
       const reason = (params.reason as string) || null;
-      const rpcId = msg.id as number; // Capture the request ID for response
+      const rpcId = msg.id as number | string; // Capture the request ID for response
 
       // A pending approval means a turn is actively waiting
       this.#turnStatusByThread = new Map(this.#turnStatusByThread).set(threadId, "InProgress");
@@ -724,6 +765,9 @@ class MessagesStore {
       } else if (method === "item/commandExecution/requestApproval") {
         approvalType = "command";
         description = reason || "Command execution requires approval";
+      } else if (method === "item/permissions/requestApproval") {
+        approvalType = "permissions";
+        description = reason || "Additional permissions required";
       } else if (method === "item/mcpToolCall/requestApproval") {
         approvalType = "mcp";
         description = reason || "MCP tool call requires approval";
@@ -734,14 +778,22 @@ class MessagesStore {
       // Extract richer params from command approval
       const command = (params.command as string) || undefined;
       const cwd = (params.cwd as string) || undefined;
+      const grantRoot = (params.grantRoot as string) || undefined;
+      const requestedPermissions =
+        params.permissions && typeof params.permissions === "object" && !Array.isArray(params.permissions)
+          ? (params.permissions as Record<string, unknown>)
+          : undefined;
 
       const approval: ApprovalRequest = {
         id: itemId,
         rpcId, // Store the RPC ID so we can respond to it
+        method,
         type: approvalType,
         description,
         command,
         cwd,
+        grantRoot,
+        requestedPermissions,
         status: "pending",
       };
 

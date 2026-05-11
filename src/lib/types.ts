@@ -75,14 +75,17 @@ export interface MessageMetadata {
 
 export interface ApprovalRequest {
   id: string;
-  rpcId: number; // The JSON-RPC request ID to respond to
-  type: "command" | "file" | "mcp" | "elicitation" | "other";
+  rpcId: number | string; // The JSON-RPC request ID to respond to
+  method: string;
+  type: "command" | "file" | "permissions" | "mcp" | "elicitation" | "other";
   description: string;
   command?: string;
   cwd?: string;
   filePath?: string;
+  grantRoot?: string;
   toolName?: string;
   reason?: string;
+  requestedPermissions?: Record<string, unknown>;
   status: "pending" | "approved" | "declined" | "cancelled";
 }
 
@@ -104,7 +107,7 @@ export interface UserInputQuestion {
 }
 
 export interface UserInputRequest {
-  rpcId: number;
+  rpcId: number | string;
   questions: UserInputQuestion[];
   status: "pending" | "answered";
 }
@@ -265,4 +268,3 @@ export interface FuzzyFileResult {
   path: string;
   score?: number;
 }
-

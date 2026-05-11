@@ -22,7 +22,9 @@
   const actionLabels: Record<ApprovalRequest["type"], string> = {
     command: "Run shell command",
     file: "Modify file",
+    permissions: "Grant permissions",
     mcp: "Run MCP tool",
+    elicitation: "Provide MCP input",
     other: "Perform action",
   };
 
@@ -87,6 +89,10 @@
 
     {#if approval.filePath}
       <div class="file-path">{approval.filePath}</div>
+    {/if}
+
+    {#if approval.grantRoot}
+      <div class="file-path">{approval.grantRoot}</div>
     {/if}
 
     {#if approval.description && approval.description !== approval.command}
