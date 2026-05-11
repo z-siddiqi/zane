@@ -36,6 +36,7 @@ export const approvalRpcIds = new Map<number | string, string>();
 export let appServer: Bun.Subprocess | null = null;
 export let appServerStarting = false;
 export let appServerInitialized = false;
+export let appServerInitializeId: number | null = null;
 export let warnedNoAppServer = false;
 
 export function setAppServer(proc: Bun.Subprocess | null): void {
@@ -46,6 +47,9 @@ export function setAppServerStarting(v: boolean): void {
 }
 export function setAppServerInitialized(v: boolean): void {
   appServerInitialized = v;
+}
+export function setAppServerInitializeId(v: number | null): void {
+  appServerInitializeId = v;
 }
 export function setWarnedNoAppServer(v: boolean): void {
   warnedNoAppServer = v;

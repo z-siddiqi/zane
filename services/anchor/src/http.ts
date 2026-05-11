@@ -1,7 +1,7 @@
 import { hostname } from "node:os";
 
 import type { WsClient } from "./types";
-import { PORT, startedAt, ORBIT_URL, orbitSocket, clients, appServer } from "./config";
+import { PORT, startedAt, ORBIT_URL, orbitSocket, clients, appServer, appServerInitialized } from "./config";
 import { parseJsonRpcMessage } from "./utils";
 import { maybeHandleAnchorLocalRpc } from "./rpc/router";
 import { ensureAppServer, sendToAppServer } from "./app-server";
@@ -20,6 +20,7 @@ export const server = Bun.serve({
       return Response.json({
         status: "ok",
         appServer: appServer !== null,
+        appServerInitialized,
         orbit: orbitStatus,
         uptime: Math.floor((Date.now() - startedAt) / 1000),
         port: PORT,
