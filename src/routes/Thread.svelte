@@ -6,6 +6,7 @@
     import { messages } from "../lib/messages.svelte";
     import { models } from "../lib/models.svelte";
     import { theme } from "../lib/theme.svelte";
+    import { codexTextInput } from "../lib/codex-input";
     import AppHeader from "../lib/components/AppHeader.svelte";
     import MessageBlock from "../lib/components/MessageBlock.svelte";
     import ApprovalPrompt from "../lib/components/ApprovalPrompt.svelte";
@@ -88,7 +89,7 @@
 
         const params: Record<string, unknown> = {
             threadId,
-            input: [{ type: "text", text: inputText }],
+            input: [codexTextInput(inputText)],
         };
 
         if (model.trim()) {

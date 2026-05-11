@@ -1,4 +1,5 @@
 import type { Message, RpcMessage, ApprovalRequest, UserInputRequest, UserInputQuestion, TurnStatus, PlanStep, CollaborationMode } from "./types";
+import { codexTextInput } from "./codex-input";
 import { socket } from "./socket.svelte";
 import { threads } from "./threads.svelte";
 
@@ -80,7 +81,7 @@ class MessagesStore {
       id: Date.now(),
       params: {
         threadId,
-        input: [{ type: "text", text }],
+        input: [codexTextInput(text)],
         expectedTurnId: turnId,
       },
     });

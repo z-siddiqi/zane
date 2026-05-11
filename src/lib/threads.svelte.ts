@@ -1,4 +1,5 @@
 import type { ApprovalPolicy, CollaborationMode, CollaborationModeMask, ModeKind, ReasoningEffort, SandboxMode, ThreadInfo, RpcMessage, ThreadSettings, TokenUsage, ThreadStatus as ThreadStatusType } from "./types";
+import { codexTextInput } from "./codex-input";
 import { socket } from "./socket.svelte";
 import { messages } from "./messages.svelte";
 import { models } from "./models.svelte";
@@ -347,7 +348,7 @@ class ThreadsStore {
         id: this.#nextId++,
         params: {
           threadId: thread.id,
-          input: [{ type: "text", text: this.#pendingStartInput }],
+          input: [codexTextInput(this.#pendingStartInput)],
           ...(this.#pendingCollaborationMode
             ? { collaborationMode: this.#pendingCollaborationMode }
             : {}),
