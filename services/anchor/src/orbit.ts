@@ -21,6 +21,13 @@ import { maybeHandleAnchorLocalRpc } from "./rpc/router";
 import { ensureAppServer, sendToAppServer } from "./app-server";
 import { buildOrbitUrl } from "./auth/jwt";
 
+const ORBIT_RECONNECT_BASE_DELAY_MS = 2_000;
+const ORBIT_RECONNECT_MAX_DELAY_MS = 30_000;
+const ORBIT_RECONNECT_JITTER_RATIO = 0.2;
+
+let orbitReconnectAttempts = 0;
+let orbitReconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+
 export function subscribeToThread(threadId: string): void {
   if (subscribedThreads.has(threadId)) return;
   if (!orbitSocket || orbitSocket.readyState !== WebSocket.OPEN) return;
@@ -87,6 +94,37 @@ function startOrbitHeartbeat(ws: WebSocket): void {
   );
 }
 
+function clearOrbitReconnectTimeout(): void {
+  if (orbitReconnectTimeout) {
+    clearTimeout(orbitReconnectTimeout);
+    orbitReconnectTimeout = null;
+  }
+}
+
+function scheduleOrbitReconnect(reason: string): void {
+  if (orbitReconnectTimeout) return;
+
+  const cappedDelay = Math.min(
+    ORBIT_RECONNECT_BASE_DELAY_MS * 2 ** orbitReconnectAttempts,
+    ORBIT_RECONNECT_MAX_DELAY_MS,
+  );
+  const jitter = Math.floor(cappedDelay * ORBIT_RECONNECT_JITTER_RATIO * Math.random());
+  const delay = cappedDelay + jitter;
+  const attempt = orbitReconnectAttempts + 1;
+  orbitReconnectAttempts = attempt;
+
+  console.warn(`[anchor] reconnecting to orbit in ${delay}ms (${reason}; attempt ${attempt})`);
+  orbitReconnectTimeout = setTimeout(() => {
+    orbitReconnectTimeout = null;
+    void connectOrbit();
+  }, delay);
+}
+
+function describeCloseEvent(event: CloseEvent): string {
+  const reason = event.reason ? ` reason="${event.reason}"` : "";
+  return `code=${event.code}${reason} clean=${event.wasClean}`;
+}
+
 export async function preflightOrbitConnection(): Promise<OrbitPreflightResult> {
   if (!ORBIT_URL) return { ok: true };
 
@@ -135,7 +173,17 @@ export async function connectOrbit(): Promise<void> {
   let opened = false;
 
   ws.addEventListener("open", () => {
+    if (orbitSocket !== ws) {
+      try {
+        ws.close(1000, "Superseded by newer connection");
+      } catch {
+        // ignore
+      }
+      return;
+    }
     opened = true;
+    orbitReconnectAttempts = 0;
+    clearOrbitReconnectTimeout();
     setOrbitConnecting(false);
     ws.send(JSON.stringify({
       type: "anchor.hello",
@@ -217,22 +265,40 @@ export async function connectOrbit(): Promise<void> {
     }
   });
 
-  ws.addEventListener("close", () => {
+  ws.addEventListener("close", (event) => {
+    const detail = describeCloseEvent(event);
+    if (orbitSocket !== ws) {
+      console.warn(`[anchor] stale orbit socket closed (${detail})`);
+      return;
+    }
+
     stopOrbitHeartbeat();
     if (!opened) {
-      console.warn("[anchor] orbit socket closed before handshake completed");
+      console.warn(`[anchor] orbit socket closed before handshake completed (${detail})`);
+    } else {
+      console.warn(`[anchor] orbit socket closed (${detail})`);
     }
+
     setOrbitSocket(null);
     setOrbitConnecting(false);
-    setTimeout(() => void connectOrbit(), 2_000);
+    scheduleOrbitReconnect(`closed ${detail}`);
   });
 
-  ws.addEventListener("error", () => {
+  ws.addEventListener("error", (event) => {
+    if (orbitSocket !== ws) {
+      console.warn("[anchor] stale orbit socket error", event);
+      return;
+    }
+
     stopOrbitHeartbeat();
     if (!opened) {
-      console.warn("[anchor] orbit socket error during handshake");
+      console.warn("[anchor] orbit socket error during handshake", event);
+    } else {
+      console.warn("[anchor] orbit socket error", event);
     }
+
     setOrbitSocket(null);
     setOrbitConnecting(false);
+    scheduleOrbitReconnect("socket error");
   });
 }
