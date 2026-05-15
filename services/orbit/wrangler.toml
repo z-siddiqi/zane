@@ -16,7 +16,7 @@ enabled = true
 [[d1_databases]]
 binding = "DB"
 database_name = "zane"
-database_id = "ca5a5a6b-6822-4246-8fc2-136ed5b1c6a0"
+database_id = "18a74ed9-eb94-4994-99f3-b4ebe5162046"
 
 [[migrations]]
 tag = "v1"
