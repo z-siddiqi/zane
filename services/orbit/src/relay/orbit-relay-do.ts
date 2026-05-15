@@ -9,8 +9,17 @@ interface AnchorMeta {
   connectedAt: string;
 }
 
-export class OrbitRelay {
+interface SocketAttachment {
+  role: Role;
+  userId: string;
+  clientId?: string;
+  threads: string[];
+  anchorMeta?: AnchorMeta;
+}
+
+export class OrbitRelay implements DurableObject {
   private env: Env;
+  private state: DurableObjectState;
   private userId: string | null = null;
 
   // Socket -> subscribed thread IDs
@@ -24,8 +33,10 @@ export class OrbitRelay {
   private threadToClients = new Map<string, Set<WebSocket>>();
   private threadToAnchors = new Map<string, Set<WebSocket>>();
 
-  constructor(_state: DurableObjectState, env: Env) {
+  constructor(state: DurableObjectState, env: Env) {
+    this.state = state;
     this.env = env;
+    this.rebuildIndexesFromAttachedSockets();
   }
 
   fetch(req: Request): Response {
@@ -49,9 +60,10 @@ export class OrbitRelay {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
-    server.accept();
+    server.serializeAttachment({ role, userId, clientId: clientId ?? undefined, threads: [] } satisfies SocketAttachment);
+    this.state.acceptWebSocket(server, [role]);
 
-    this.registerSocket(server, role, clientId);
+    this.registerSocket(server, role, clientId, userId);
 
     return new Response(null, {
       status: 101,
@@ -59,7 +71,65 @@ export class OrbitRelay {
     });
   }
 
-  private registerSocket(socket: WebSocket, role: Role, clientId: string | null): void {
+  webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
+    const attachment = this.getSocketAttachment(socket);
+    if (!attachment) {
+      try {
+        socket.close(1008, "Missing socket attachment");
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    this.userId = attachment.userId;
+    if (this.handlePing(socket, message)) {
+      return;
+    }
+
+    const payloadStr = this.dataToString(message);
+    const parsed = payloadStr ? parseJsonMessage(payloadStr) : null;
+
+    if (this.handleSubscription(socket, attachment.role, parsed)) {
+      return;
+    }
+
+    if (this.handleAnchorHello(socket, attachment.role, parsed)) {
+      return;
+    }
+
+    this.routeMessage(socket, attachment.role, message, parsed);
+  }
+
+  webSocketClose(socket: WebSocket, code: number, reason: string, wasClean: boolean): void {
+    const attachment = this.getSocketAttachment(socket);
+    if (attachment) {
+      this.removeSocket(socket, attachment.role);
+    }
+    console.log(`[orbit] websocket closed role=${attachment?.role ?? "unknown"} code=${code} reason="${reason}" clean=${wasClean}`);
+
+    try {
+      socket.close(code, reason);
+    } catch {
+      // ignore
+    }
+  }
+
+  webSocketError(socket: WebSocket, error: unknown): void {
+    const attachment = this.getSocketAttachment(socket);
+    if (attachment) {
+      this.removeSocket(socket, attachment.role);
+    }
+    console.warn(`[orbit] websocket error role=${attachment?.role ?? "unknown"}`, error);
+
+    try {
+      socket.close(1011, "WebSocket error");
+    } catch {
+      // ignore
+    }
+  }
+
+  private registerSocket(socket: WebSocket, role: Role, clientId: string | null, userId: string): void {
     const source = role === "client" ? this.clientSockets : this.anchorSockets;
 
     if (role === "client" && clientId) {
@@ -77,6 +147,7 @@ export class OrbitRelay {
     }
 
     source.set(socket, new Set());
+    this.writeSocketAttachment(socket, { role, userId, clientId: clientId ?? undefined, threads: [] });
 
     socket.send(
       JSON.stringify({
@@ -85,37 +156,75 @@ export class OrbitRelay {
         ts: new Date().toISOString(),
       })
     );
+  }
 
-    socket.addEventListener("message", (event) => {
-      if (this.handlePing(socket, event.data)) {
-        return;
+  private rebuildIndexesFromAttachedSockets(): void {
+    for (const socket of this.state.getWebSockets()) {
+      const attachment = this.getSocketAttachment(socket);
+      if (!attachment) continue;
+
+      this.userId ??= attachment.userId;
+      const source = attachment.role === "client" ? this.clientSockets : this.anchorSockets;
+      const threads = new Set(attachment.threads);
+      source.set(socket, threads);
+
+      for (const threadId of threads) {
+        const threadSockets = attachment.role === "client" ? this.threadToClients : this.threadToAnchors;
+        if (!threadSockets.has(threadId)) {
+          threadSockets.set(threadId, new Set());
+        }
+        threadSockets.get(threadId)!.add(socket);
       }
 
-      const payloadStr = this.dataToString(event.data);
-      const parsed = payloadStr ? parseJsonMessage(payloadStr) : null;
-
-      if (this.handleSubscription(socket, role, parsed)) {
-        return;
+      if (attachment.role === "client" && attachment.clientId) {
+        this.clientIdToSocket.set(attachment.clientId, socket);
+        this.socketToClientId.set(socket, attachment.clientId);
       }
 
-      if (this.handleAnchorHello(socket, role, parsed)) {
-        return;
+      if (attachment.role === "anchor" && attachment.anchorMeta) {
+        this.anchorMeta.set(socket, attachment.anchorMeta);
       }
+    }
+  }
 
-      this.routeMessage(socket, role, event.data, parsed);
-    });
+  private getSocketAttachment(socket: WebSocket): SocketAttachment | null {
+    const attachment = socket.deserializeAttachment() as Partial<SocketAttachment> | null;
+    if (!attachment || (attachment.role !== "client" && attachment.role !== "anchor")) return null;
+    if (typeof attachment.userId !== "string" || !attachment.userId) return null;
 
-    const cleanup = () => {
-      this.removeSocket(socket, role);
-      try {
-        socket.close();
-      } catch {
-        // ignore
-      }
+    return {
+      role: attachment.role,
+      userId: attachment.userId,
+      clientId: typeof attachment.clientId === "string" ? attachment.clientId : undefined,
+      threads: Array.isArray(attachment.threads)
+        ? attachment.threads.filter((threadId): threadId is string => typeof threadId === "string" && !!threadId)
+        : [],
+      anchorMeta: this.isAnchorMeta(attachment.anchorMeta) ? attachment.anchorMeta : undefined,
     };
+  }
 
-    socket.addEventListener("close", cleanup);
-    socket.addEventListener("error", cleanup);
+  private writeSocketAttachment(socket: WebSocket, update: Partial<SocketAttachment>): void {
+    const current = this.getSocketAttachment(socket);
+    if (!current && (!update.role || !update.userId)) return;
+    const next: SocketAttachment = {
+      role: update.role ?? current!.role,
+      userId: update.userId ?? current!.userId,
+      clientId: update.clientId ?? current?.clientId,
+      threads: update.threads ?? current?.threads ?? [],
+      anchorMeta: update.anchorMeta ?? current?.anchorMeta,
+    };
+    socket.serializeAttachment(next);
+  }
+
+  private isAnchorMeta(value: unknown): value is AnchorMeta {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const meta = value as Record<string, unknown>;
+    return (
+      typeof meta.id === "string" &&
+      typeof meta.hostname === "string" &&
+      typeof meta.platform === "string" &&
+      typeof meta.connectedAt === "string"
+    );
   }
 
   private handleSubscription(socket: WebSocket, role: Role, msg: Record<string, unknown> | null): boolean {
@@ -189,6 +298,7 @@ export class OrbitRelay {
     };
 
     this.anchorMeta.set(socket, meta);
+    this.writeSocketAttachment(socket, { anchorMeta: meta });
 
     const notification = JSON.stringify({ type: "orbit.anchor-connected", anchor: meta });
     for (const clientSocket of this.clientSockets.keys()) {
@@ -209,6 +319,7 @@ export class OrbitRelay {
 
     if (socketThreads) {
       socketThreads.add(threadId);
+      this.writeSocketAttachment(socket, { threads: Array.from(socketThreads) });
     }
 
     const threadSockets = role === "client" ? this.threadToClients : this.threadToAnchors;
@@ -225,6 +336,7 @@ export class OrbitRelay {
 
     if (socketThreads) {
       socketThreads.delete(threadId);
+      this.writeSocketAttachment(socket, { threads: Array.from(socketThreads) });
     }
 
     const threadSockets = role === "client" ? this.threadToClients : this.threadToAnchors;
