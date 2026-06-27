@@ -127,6 +127,63 @@ class MessagesStore {
     }
   }
 
+  #dedupeMessages(messages: Message[]): Message[] {
+    const byId = new Map<string, Message>();
+
+    for (const message of messages) {
+      byId.set(message.id, { ...byId.get(message.id), ...message });
+    }
+
+    return Array.from(byId.values());
+  }
+
+  #mergeThreadSnapshot(threadId: string, snapshot: Message[]): Message[] {
+    const merged: Message[] = [];
+    const existing = this.#byThread.get(threadId) ?? [];
+
+    const push = (message: Message, preferLatest: boolean) => {
+      const idx = merged.findIndex((m) => m.id === message.id);
+      if (idx >= 0) {
+        if (preferLatest) {
+          merged[idx] = { ...merged[idx], ...message };
+        }
+        return;
+      }
+      merged.push(message);
+    };
+
+    for (const message of snapshot) {
+      push(message, true);
+    }
+
+    for (const message of existing) {
+      push(message, true);
+    }
+
+    for (const [id, message] of this.#pendingLiveMessages) {
+      if (message.threadId === threadId) {
+        push({ ...message, id }, true);
+      }
+    }
+
+    return this.#dedupeMessages(merged);
+  }
+
+  #stableRequestItemId(
+    prefix: string,
+    method: string,
+    rpcId: number | string | undefined,
+    params: Record<string, unknown>,
+  ): string {
+    const explicit =
+      (params.approvalId as string | undefined) ||
+      (params.itemId as string | undefined) ||
+      (params.item_id as string | undefined);
+    if (explicit) return explicit;
+    if (rpcId != null) return `${prefix}-${method}-${String(rpcId)}`;
+    return `${prefix}-${Date.now()}`;
+  }
+
   get current(): Message[] {
     const threadId = threads.currentId;
     if (!threadId) return [];
@@ -283,13 +340,17 @@ class MessagesStore {
     if (!threadId) return;
 
     const messages = this.#byThread.get(threadId) ?? [];
-    const idx = messages.findIndex((m) => m.approval?.id === approvalId);
-    if (idx >= 0) {
-      const updated = [...messages];
-      updated[idx] = {
-        ...messages[idx],
-        approval: { ...messages[idx].approval!, status },
+    let changed = false;
+    const updated = messages.map((message) => {
+      if (message.approval?.id !== approvalId) return message;
+      changed = true;
+      return {
+        ...message,
+        approval: { ...message.approval, status },
       };
+    });
+
+    if (changed) {
       this.#byThread = new Map(this.#byThread).set(threadId, updated);
     }
   }
@@ -301,6 +362,20 @@ class MessagesStore {
     }
     this.#byThread.set(threadId, [...existing, message]);
     this.#byThread = new Map(this.#byThread);
+  }
+
+  #addUserMessage(threadId: string, message: Message) {
+    const existing = this.#byThread.get(threadId) ?? [];
+    if (existing.some((m) => m.id === message.id)) {
+      return;
+    }
+
+    const streamingIdx = existing.findIndex(
+      (m) => m.role === "assistant" && this.#streamingText.has(`${threadId}:${m.id}`),
+    );
+    const next = [...existing];
+    next.splice(streamingIdx >= 0 ? streamingIdx : existing.length, 0, message);
+    this.#byThread = new Map(this.#byThread).set(threadId, next);
   }
 
   #upsert(threadId: string, message: Message) {
@@ -505,13 +580,14 @@ class MessagesStore {
         const itemId = item.id as string;
         const content = item.content as Array<{ type: string; text?: string }>;
         const text = content?.find((c) => c.type === "text")?.text || "";
-
-        this.#add(threadId, {
+        const confirmed: Message = {
           id: itemId,
           role: "user",
           text,
           threadId,
-        });
+        };
+
+        this.#addUserMessage(threadId, confirmed);
       } else if (type === "commandExecution") {
         const itemId = item.id as string;
         const command = (item.command as string) || "";
@@ -679,7 +755,7 @@ class MessagesStore {
     // User input requests (plan mode questions)
     if (method === "item/tool/requestUserInput") {
       const rpcId = msg.id as number | string;
-      const itemId = (params.itemId as string) || (params.item_id as string) || `user-input-${Date.now()}`;
+      const itemId = this.#stableRequestItemId("user-input", method, rpcId, params);
       const questions = (params.questions as UserInputQuestion[]) || [];
 
       // A pending request means a turn is actively waiting
@@ -748,9 +824,9 @@ class MessagesStore {
 
     // Approval requests (file changes, commands, etc.)
     if (method?.includes("/requestApproval")) {
-      const itemId = (params.approvalId as string) || (params.itemId as string) || `approval-${Date.now()}`;
+      const rpcId = msg.id as number | string | undefined;
+      const itemId = this.#stableRequestItemId("approval", method, rpcId, params);
       const reason = (params.reason as string) || null;
-      const rpcId = msg.id as number | string; // Capture the request ID for response
 
       // A pending approval means a turn is actively waiting
       this.#turnStatusByThread = new Map(this.#turnStatusByThread).set(threadId, "InProgress");
@@ -786,7 +862,7 @@ class MessagesStore {
 
       const approval: ApprovalRequest = {
         id: itemId,
-        rpcId, // Store the RPC ID so we can respond to it
+        rpcId: rpcId ?? itemId, // Store the RPC ID so we can respond to it
         method,
         type: approvalType,
         description,
@@ -890,15 +966,19 @@ class MessagesStore {
 
     // Server request resolved (clear the corresponding pending approval)
     if (method === "serverRequest/resolved") {
-      const requestId = params.requestId as number | undefined;
+      const requestId = params.requestId as number | string | undefined;
       if (requestId != null) {
+        let changed = false;
         for (const [id, approval] of this.#pendingApprovals) {
-          if (approval.rpcId === requestId && approval.status === "pending") {
+          if (String(approval.rpcId) === String(requestId) && approval.status === "pending") {
             approval.status = "approved";
-            this.#pendingApprovals = new Map(this.#pendingApprovals);
+            this.#pendingLiveMessages.delete(`approval-${id}`);
             this.#updateApprovalInMessages(id, "approved");
-            break;
+            changed = true;
           }
+        }
+        if (changed) {
+          this.#pendingApprovals = new Map(this.#pendingApprovals);
         }
       }
       return;
@@ -1167,18 +1247,7 @@ class MessagesStore {
       }
     }
 
-    // Preserve any pending approval or user-input messages that arrived
-    // before the thread history loaded (e.g. replayed from orbit).
-    // We read from #pendingLiveMessages (a plain Map, not a Svelte proxy)
-    // to avoid timing issues with the reactive #byThread proxy.
-    for (const [id, msg] of this.#pendingLiveMessages) {
-      if (msg.threadId !== threadId) continue;
-      if (!messages.some((m) => m.id === id)) {
-        messages.push(msg);
-      }
-    }
-
-    this.#byThread.set(threadId, messages);
+    this.#byThread.set(threadId, this.#mergeThreadSnapshot(threadId, messages));
     this.#byThread = new Map(this.#byThread);
   }
 }

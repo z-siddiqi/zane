@@ -32,6 +32,7 @@ export function setUserId(id: string | undefined): void {
 export const clients = new Set<WsClient>();
 export const subscribedThreads = new Set<string>();
 export const pendingApprovals = new Map<string, string>();
+export const pendingUserMessages = new Map<string, string>();
 export const approvalRpcIds = new Map<number | string, string>();
 
 export let appServer: Bun.Subprocess | null = null;

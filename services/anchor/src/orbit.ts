@@ -10,6 +10,7 @@ import {
   orbitHeartbeatTimeout,
   subscribedThreads,
   pendingApprovals,
+  pendingUserMessages,
   approvalRpcIds,
   setOrbitSocket,
   setOrbitConnecting,
@@ -217,15 +218,15 @@ export async function connectOrbit(): Promise<void> {
       const parsed = JSON.parse(text) as Record<string, unknown>;
       if (typeof parsed.type === "string" && (parsed.type as string).startsWith("orbit.")) {
         if (parsed.type === "orbit.client-subscribed" && typeof parsed.threadId === "string") {
+          const userMessage = pendingUserMessages.get(parsed.threadId);
+          if (userMessage && orbitSocket && orbitSocket.readyState === WebSocket.OPEN) {
+            resendBufferedMessage(userMessage);
+            console.log(`[anchor] re-sent pending user message for thread ${parsed.threadId}`);
+          }
+
           const buffered = pendingApprovals.get(parsed.threadId);
           if (buffered && orbitSocket && orbitSocket.readyState === WebSocket.OPEN) {
-            try {
-              const bufferedMsg = JSON.parse(buffered);
-              bufferedMsg._replay = true;
-              orbitSocket.send(JSON.stringify(bufferedMsg));
-            } catch {
-              orbitSocket.send(buffered);
-            }
+            resendBufferedMessage(buffered);
             console.log(`[anchor] re-sent pending approval for thread ${parsed.threadId}`);
           }
         }
@@ -301,4 +302,15 @@ export async function connectOrbit(): Promise<void> {
     setOrbitConnecting(false);
     scheduleOrbitReconnect("socket error");
   });
+}
+
+function resendBufferedMessage(message: string): void {
+  if (!orbitSocket || orbitSocket.readyState !== WebSocket.OPEN) return;
+  try {
+    const replay = JSON.parse(message);
+    replay._replay = true;
+    orbitSocket.send(JSON.stringify(replay));
+  } catch {
+    orbitSocket.send(message);
+  }
 }

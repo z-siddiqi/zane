@@ -81,7 +81,11 @@ class ThreadsStore {
 
   open(threadId: string) {
     const id = this.#nextId++;
+    const previousId = this.currentId;
     this.loading = true;
+    if (previousId && previousId !== threadId) {
+      socket.unsubscribeThread(previousId);
+    }
     this.currentId = threadId;
     messages.clearThread(threadId);
     socket.subscribeThread(threadId);

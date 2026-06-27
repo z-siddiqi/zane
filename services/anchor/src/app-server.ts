@@ -12,6 +12,7 @@ import {
   clients,
   orbitSocket,
   pendingApprovals,
+  pendingUserMessages,
   approvalRpcIds,
   APPROVAL_METHODS,
 } from "./config";
@@ -110,12 +111,17 @@ export function ensureAppServer(): void {
         }
 
         const method = parsed.method as string | undefined;
+        if (method === "item/started" && threadId && isUserMessageItem(parsed)) {
+          pendingUserMessages.set(threadId, line);
+        }
+
         if (method && APPROVAL_METHODS.has(method) && threadId) {
           pendingApprovals.set(threadId, line);
           const rpcId = parsed.id as number | string | undefined;
           if (rpcId != null) approvalRpcIds.set(rpcId, threadId);
         } else if (method === "turn/completed" && threadId) {
           pendingApprovals.delete(threadId);
+          pendingUserMessages.delete(threadId);
         }
       }
 
@@ -188,6 +194,14 @@ function handleInitializeResponse(message: Record<string, unknown>): boolean {
   console.log("[anchor] app-server initialized");
   flushQueuedPayloads();
   return true;
+}
+
+function isUserMessageItem(message: Record<string, unknown>): boolean {
+  const params = message.params;
+  if (!params || typeof params !== "object" || Array.isArray(params)) return false;
+  const item = (params as Record<string, unknown>).item;
+  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+  return (item as Record<string, unknown>).type === "userMessage";
 }
 
 function isWritableStream(input: unknown): input is WritableStream<Uint8Array> {
