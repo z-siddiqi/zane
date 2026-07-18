@@ -1,44 +1,47 @@
 <script lang="ts">
-  import type { AccountInfo, RateLimitSnapshot } from "../lib/types";
   import { auth } from "../lib/auth.svelte";
   import { theme } from "../lib/theme.svelte";
   import { config } from "../lib/config.svelte";
   import { connectionManager } from "../lib/connection-manager.svelte";
   import { socket } from "../lib/socket.svelte";
+  import { account } from "../lib/account.svelte";
   import AppHeader from "../lib/components/AppHeader.svelte";
   import NotificationSettings from "../lib/components/NotificationSettings.svelte";
   import { anchors } from "../lib/anchors.svelte";
 
   const themeIcons = { system: "◐", light: "○", dark: "●" } as const;
 
-  let accountInfo = $state<AccountInfo | null>(null);
-  let rateLimits = $state<RateLimitSnapshot | null>(null);
-  let accountError = $state<string | null>(null);
-
   const anchorList = $derived(anchors.list);
+  const accountInfo = $derived(account.info);
+  const rateLimits = $derived(account.rateLimits);
+  const accountError = $derived(account.error);
+  const rateLimitEntries = $derived.by(() => {
+    const entries = Object.entries(account.rateLimitsByLimitId ?? {});
+    if (entries.length > 0) return entries;
+    return rateLimits ? [[rateLimits.limitId ?? "default", rateLimits] as const] : [];
+  });
 
   $effect(() => {
     if (socket.status === "connected") {
-      loadAccountInfo();
+      void account.refresh();
     } else {
-      accountInfo = null;
-      rateLimits = null;
-      accountError = null;
+      account.clear();
     }
   });
 
-  async function loadAccountInfo() {
-    accountError = null;
-    try {
-      const [info, limits] = await Promise.allSettled([
-        socket.accountRead(),
-        socket.accountRateLimits(),
-      ]);
-      accountInfo = info.status === "fulfilled" ? info.value : null;
-      rateLimits = limits.status === "fulfilled" ? limits.value.rateLimits : null;
-    } catch {
-      accountError = "Failed to load account info";
-    }
+  function formatTimestamp(seconds: number | null | undefined): string {
+    if (!seconds) return "";
+    return new Date(seconds * 1000).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function formatReset(seconds: number | null | undefined): string {
+    const formatted = formatTimestamp(seconds);
+    return formatted ? `resets ${formatted}` : "";
   }
 
   const platformLabels: Record<string, string> = {
@@ -198,6 +201,12 @@
         {:else if accountInfo || rateLimits}
           <div class="account-info stack">
             {#if accountInfo}
+              {#if accountInfo.type}
+                <div class="account-row split">
+                  <span class="account-label">type</span>
+                  <span class="account-value">{accountInfo.type}</span>
+                </div>
+              {/if}
               {#if accountInfo.email}
                 <div class="account-row split">
                   <span class="account-label">email</span>
@@ -216,33 +225,73 @@
                   <span class="account-value">{accountInfo.plan}</span>
                 </div>
               {/if}
+              {#if accountInfo.requiresOpenaiAuth && !accountInfo.type}
+                <div class="account-row split">
+                  <span class="account-label">provider auth</span>
+                  <span class="account-value">OpenAI required</span>
+                </div>
+              {/if}
             {/if}
 
-            {#if rateLimits}
+            {#if rateLimitEntries.length}
               <div class="rate-limits stack">
-                <span class="field-label">rate limits{rateLimits.limitName ? ` · ${rateLimits.limitName}` : ""}</span>
-                {#if rateLimits.primary}
-                  <div class="rate-limit-row split">
-                    <span class="account-label">{rateLimits.primary.windowDurationMins ? `${rateLimits.primary.windowDurationMins}m window` : "primary"}</span>
-                    <span class="account-value">{rateLimits.primary.usedPercent}% used</span>
+                <span class="field-label">rate limits</span>
+                {#each rateLimitEntries as [limitId, limit]}
+                  <div class="limit-group stack">
+                    <div class="rate-limit-row split">
+                      <span class="account-label">{limit.limitName || limitId}</span>
+                      <span class="account-value">{limit.rateLimitReachedType || limit.planType || ""}</span>
+                    </div>
+                    {#if limit.primary}
+                      <div class="rate-limit-row split">
+                        <span class="account-label">{limit.primary.windowDurationMins ? `${limit.primary.windowDurationMins}m window` : "primary"}</span>
+                        <span class="account-value">{limit.primary.usedPercent}% used{formatReset(limit.primary.resetsAt) ? ` · ${formatReset(limit.primary.resetsAt)}` : ""}</span>
+                      </div>
+                    {/if}
+                    {#if limit.secondary}
+                      <div class="rate-limit-row split">
+                        <span class="account-label">{limit.secondary.windowDurationMins ? `${limit.secondary.windowDurationMins}m window` : "secondary"}</span>
+                        <span class="account-value">{limit.secondary.usedPercent}% used{formatReset(limit.secondary.resetsAt) ? ` · ${formatReset(limit.secondary.resetsAt)}` : ""}</span>
+                      </div>
+                    {/if}
+                    {#if limit.credits}
+                      <div class="rate-limit-row split">
+                        <span class="account-label">credits</span>
+                        <span class="account-value">{limit.credits.unlimited ? "unlimited" : limit.credits.balance ?? (limit.credits.hasCredits ? "available" : "none")}</span>
+                      </div>
+                    {/if}
+                    {#if limit.individualLimit}
+                      <div class="rate-limit-row split">
+                        <span class="account-label">spend control</span>
+                        <span class="account-value">{limit.individualLimit.used} / {limit.individualLimit.limit} · {limit.individualLimit.remainingPercent}% left</span>
+                      </div>
+                    {/if}
+                    {#if limit.spendControlReached}
+                      <div class="rate-limit-row split">
+                        <span class="account-label">status</span>
+                        <span class="account-value warning-value">spend control reached</span>
+                      </div>
+                    {/if}
                   </div>
-                {/if}
-                {#if rateLimits.secondary}
+                {/each}
+                {#if account.rateLimitResetCredits}
                   <div class="rate-limit-row split">
-                    <span class="account-label">{rateLimits.secondary.windowDurationMins ? `${rateLimits.secondary.windowDurationMins}m window` : "secondary"}</span>
-                    <span class="account-value">{rateLimits.secondary.usedPercent}% used</span>
+                    <span class="account-label">reset credits</span>
+                    <span class="account-value">{String(account.rateLimitResetCredits.availableCount)} available</span>
                   </div>
-                {/if}
-                {#if rateLimits.planType}
-                  <div class="rate-limit-row split">
-                    <span class="account-label">plan tier</span>
-                    <span class="account-value">{rateLimits.planType}</span>
-                  </div>
+                  {#if account.rateLimitResetCredits.credits?.length}
+                    {#each account.rateLimitResetCredits.credits as credit}
+                      <div class="rate-limit-row split">
+                        <span class="account-label">{credit.title || credit.resetType}</span>
+                        <span class="account-value">{credit.expiresAt ? `expires ${formatTimestamp(credit.expiresAt)}` : credit.status}</span>
+                      </div>
+                    {/each}
+                  {/if}
                 {/if}
               </div>
             {/if}
           </div>
-        {:else if socket.status === "connected"}
+        {:else if socket.status === "connected" || account.loading}
           <p class="hint">Loading account info...</p>
         {:else}
           <p class="hint">Connect to view account info.</p>
@@ -476,8 +525,18 @@
     text-align: right;
   }
 
+  .warning-value {
+    color: var(--cli-warning);
+  }
+
   .rate-limits {
     --stack-gap: var(--space-xs);
+  }
+
+  .limit-group {
+    --stack-gap: 2px;
+    padding-top: var(--space-xs);
+    border-top: 1px solid var(--cli-border);
   }
 
   .sign-out-btn {

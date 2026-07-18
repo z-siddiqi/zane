@@ -192,10 +192,27 @@ export interface CollaborationModeMask {
 }
 
 export interface AccountInfo {
+  type?: string;
+  authMode?: string | null;
   email?: string;
   name?: string;
   plan?: string;
+  planType?: string | null;
   id?: string;
+  requiresOpenaiAuth?: boolean;
+}
+
+export interface AccountPayload {
+  type?: string;
+  email?: string | null;
+  name?: string | null;
+  planType?: string | null;
+  usesCodexManagedCredentials?: boolean;
+}
+
+export interface AccountReadResponse {
+  account?: AccountPayload | AccountInfo | null;
+  requiresOpenaiAuth?: boolean;
 }
 
 export interface RateLimitWindow {
@@ -204,16 +221,54 @@ export interface RateLimitWindow {
   resetsAt?: number | null;
 }
 
+export interface CreditsSnapshot {
+  hasCredits: boolean;
+  unlimited: boolean;
+  balance?: string | null;
+}
+
+export interface SpendControlLimitSnapshot {
+  limit: string;
+  used: string;
+  remainingPercent: number;
+  resetsAt: number;
+}
+
+export interface RateLimitResetCredit {
+  id: string;
+  resetType: string;
+  status: string;
+  grantedAt: number;
+  expiresAt?: number | null;
+  title?: string | null;
+  description?: string | null;
+}
+
+export interface RateLimitResetCreditsSummary {
+  availableCount: number | string | bigint;
+  credits?: RateLimitResetCredit[] | null;
+}
+
 export interface RateLimitSnapshot {
   limitId?: string | null;
   limitName?: string | null;
   primary?: RateLimitWindow | null;
   secondary?: RateLimitWindow | null;
+  credits?: CreditsSnapshot | null;
+  individualLimit?: SpendControlLimitSnapshot | null;
+  spendControlReached?: boolean | null;
   planType?: string | null;
+  rateLimitReachedType?: string | null;
 }
 
 export interface RateLimitsResponse {
   rateLimits: RateLimitSnapshot;
+  rateLimitsByLimitId?: Record<string, RateLimitSnapshot> | null;
+  rateLimitResetCredits?: RateLimitResetCreditsSummary | null;
+}
+
+export interface RateLimitResetCreditConsumeResponse {
+  outcome: string;
 }
 
 export interface GitInspectResult {

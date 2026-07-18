@@ -1,5 +1,5 @@
 import type {
-  AccountInfo,
+  AccountReadResponse,
   ConnectionStatus,
   FuzzyFileResult,
   GitInspectResult,
@@ -8,6 +8,7 @@ import type {
   GitWorktreeListResult,
   McpServerStatus,
   RateLimitsResponse,
+  RateLimitResetCreditConsumeResponse,
   RpcMessage,
   Skill,
 } from "./types";
@@ -333,11 +334,11 @@ class SocketStore {
     });
   }
 
-  accountRead(): Promise<AccountInfo> {
+  accountRead(): Promise<AccountReadResponse> {
     const id = `account-read-${++this.#rpcIdCounter}`;
     return new Promise((resolve, reject) => {
       this.#pendingRpc.set(id, {
-        resolve: (v) => resolve(v as AccountInfo),
+        resolve: (v) => resolve(v as AccountReadResponse),
         reject,
       });
       const result = this.send({ id, method: "account/read", params: {} });
@@ -410,6 +411,29 @@ class SocketStore {
         reject,
       });
       const result = this.send({ id, method: "account/rateLimits/read", params: {} });
+      if (!result.success) {
+        this.#pendingRpc.delete(id);
+        reject(new Error(result.error ?? "Not connected"));
+      }
+    });
+  }
+
+  accountRateLimitResetCreditConsume(creditId?: string | null): Promise<RateLimitResetCreditConsumeResponse> {
+    const id = `account-reset-credit-${++this.#rpcIdCounter}`;
+    const idempotencyKey =
+      typeof crypto?.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return new Promise((resolve, reject) => {
+      this.#pendingRpc.set(id, {
+        resolve: (v) => resolve(v as RateLimitResetCreditConsumeResponse),
+        reject,
+      });
+      const result = this.send({
+        id,
+        method: "account/rateLimitResetCredit/consume",
+        params: { idempotencyKey, ...(creditId ? { creditId } : {}) },
+      });
       if (!result.success) {
         this.#pendingRpc.delete(id);
         reject(new Error(result.error ?? "Not connected"));
