@@ -28,8 +28,12 @@ export function extractThreadId(message: JsonObject): string | null {
   const candidates = [
     params?.threadId,
     params?.thread_id,
+    params?.conversationId,
+    params?.conversation_id,
     result?.threadId,
     result?.thread_id,
+    result?.conversationId,
+    result?.conversation_id,
     threadFromParams?.id,
     threadFromResult?.id,
   ];

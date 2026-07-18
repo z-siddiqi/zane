@@ -472,7 +472,16 @@ export class OrbitRelay implements DurableObject {
   }
 
   private isPushWorthy(method: string): boolean {
-    return method.endsWith("/requestApproval") || method === "item/tool/requestUserInput";
+    return (
+      method.endsWith("/requestApproval") ||
+      method === "item/tool/requestUserInput" ||
+      method === "mcpServer/elicitation/request" ||
+      method === "item/tool/call" ||
+      method === "applyPatchApproval" ||
+      method === "execCommandApproval" ||
+      method === "account/chatgptAuthTokens/refresh" ||
+      method === "attestation/generate"
+    );
   }
 
   private buildPushPayload(msg: Record<string, unknown>, method: string, threadId: string | null): PushPayload {
@@ -483,20 +492,33 @@ export class OrbitRelay implements DurableObject {
     let title = "Approval Required";
     let body = reason || "An action requires your approval";
 
-    if (method === "item/fileChange/requestApproval") {
+    if (method === "item/fileChange/requestApproval" || method === "applyPatchApproval") {
       title = "File Change Approval";
       body = reason || "A file change needs your approval";
-    } else if (method === "item/commandExecution/requestApproval") {
+    } else if (method === "item/commandExecution/requestApproval" || method === "execCommandApproval") {
       title = "Command Approval";
       body = reason || "A command needs your approval";
-    } else if (method === "item/mcpToolCall/requestApproval") {
-      title = "Tool Call Approval";
-      body = reason || "A tool call needs your approval";
+    } else if (method === "item/tool/call") {
+      type = "tool-call";
+      title = "Tool Call Required";
+      body = (params?.tool as string) || "A tool call needs attention";
     } else if (method === "item/tool/requestUserInput") {
       type = "user-input";
       title = "Input Required";
       const questions = (params?.questions as Array<{ question: string }>) || [];
       body = questions[0]?.question || "Input required";
+    } else if (method === "mcpServer/elicitation/request") {
+      type = "user-input";
+      title = "MCP Input Required";
+      body = reason || "An MCP server needs input";
+    } else if (method === "account/chatgptAuthTokens/refresh") {
+      type = "account";
+      title = "Account Refresh Required";
+      body = "Codex needs refreshed ChatGPT credentials";
+    } else if (method === "attestation/generate") {
+      type = "account";
+      title = "Attestation Required";
+      body = "Codex requested client attestation";
     }
 
     return {

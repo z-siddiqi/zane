@@ -25,6 +25,7 @@
     permissions: "Grant permissions",
     mcp: "Run MCP tool",
     elicitation: "Provide MCP input",
+    "dynamic-tool": "Run dynamic tool",
     other: "Perform action",
   };
 

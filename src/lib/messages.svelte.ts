@@ -127,24 +127,27 @@ class MessagesStore {
     }
   }
 
-  #dedupeMessages(messages: Message[]): Message[] {
-    const byId = new Map<string, Message>();
-
-    for (const message of messages) {
-      byId.set(message.id, { ...byId.get(message.id), ...message });
+  hydrateThread(
+    threadId: string,
+    turns: Array<{ items?: unknown[]; status?: string; id?: string }>,
+    options: { authoritative?: boolean } = {},
+  ) {
+    if (turns.length === 0 && this.#loadedThreads.has(threadId)) {
+      return;
     }
-
-    return Array.from(byId.values());
+    this.#loadedThreads.add(threadId);
+    this.#loadThread(threadId, turns, options);
   }
 
   #mergeThreadSnapshot(threadId: string, snapshot: Message[]): Message[] {
     const merged: Message[] = [];
     const existing = this.#byThread.get(threadId) ?? [];
+    const snapshotIds = new Set(snapshot.map((message) => message.id));
 
-    const push = (message: Message, preferLatest: boolean) => {
+    const push = (message: Message, replaceExisting: boolean) => {
       const idx = merged.findIndex((m) => m.id === message.id);
       if (idx >= 0) {
-        if (preferLatest) {
+        if (replaceExisting) {
           merged[idx] = { ...merged[idx], ...message };
         }
         return;
@@ -154,19 +157,20 @@ class MessagesStore {
 
     for (const message of snapshot) {
       push(message, true);
+      this.#clearStreaming(threadId, message.id);
     }
 
     for (const message of existing) {
-      push(message, true);
+      push(message, !snapshotIds.has(message.id));
     }
 
     for (const [id, message] of this.#pendingLiveMessages) {
       if (message.threadId === threadId) {
-        push({ ...message, id }, true);
+        push({ ...message, id }, !snapshotIds.has(id));
       }
     }
 
-    return this.#dedupeMessages(merged);
+    return merged;
   }
 
   #stableRequestItemId(
@@ -258,6 +262,14 @@ class MessagesStore {
       return { action: "accept", content: {}, _meta: null };
     }
 
+    if (approval.method === "applyPatchApproval" || approval.method === "execCommandApproval") {
+      return { decision: forSession ? "approved_for_session" : "approved" };
+    }
+
+    if (approval.method === "item/fileChange/requestApproval" || approval.method === "item/commandExecution/requestApproval") {
+      return { decision: forSession ? "acceptForSession" : "accept" };
+    }
+
     return { decision: forSession ? "acceptForSession" : "accept" };
   }
 
@@ -268,6 +280,10 @@ class MessagesStore {
 
     if (approval.method === "mcpServer/elicitation/request") {
       return { action, content: null, _meta: null };
+    }
+
+    if (approval.method === "applyPatchApproval" || approval.method === "execCommandApproval") {
+      return { decision: action === "cancel" ? "abort" : "denied" };
     }
 
     return { decision: action };
@@ -551,14 +567,36 @@ class MessagesStore {
   }
 
   handleMessage(msg: RpcMessage) {
+    if (msg.method === "account/chatgptAuthTokens/refresh") {
+      if (msg.id != null) {
+        socket.send({
+          id: msg.id,
+          error: {
+            code: -32000,
+            message: "Zane cannot refresh ChatGPT auth tokens yet.",
+          },
+        });
+      }
+      return;
+    }
+
+    if (msg.method === "attestation/generate") {
+      if (msg.id != null) {
+        socket.send({
+          id: msg.id,
+          error: {
+            code: -32000,
+            message: "Zane cannot generate client attestation yet.",
+          },
+        });
+      }
+      return;
+    }
+
     if (msg.result && !msg.method) {
       const result = msg.result as { thread?: { id: string; turns?: Array<{ items?: unknown[] }> } };
       if (result.thread?.turns) {
-        const threadId = result.thread.id;
-        if (!this.#loadedThreads.has(threadId)) {
-          this.#loadedThreads.add(threadId);
-          this.#loadThread(threadId, result.thread.turns);
-        }
+        this.hydrateThread(result.thread.id, result.thread.turns, { authoritative: true });
       }
       return;
     }
@@ -569,6 +607,32 @@ class MessagesStore {
 
     const threadId = this.#extractThreadId(params);
     if (!threadId) return;
+
+    if (method === "item/tool/call") {
+      const callId = (params.callId as string) || (params.call_id as string) || `dynamic-tool-${Date.now()}`;
+      const tool = (params.tool as string) || "dynamic tool";
+      const namespace = (params.namespace as string | null) || null;
+      const description = `${namespace ? `${namespace}.` : ""}${tool} is not available in Zane yet.`;
+
+      this.#add(threadId, {
+        id: `dynamic-tool-${callId}`,
+        role: "tool",
+        kind: "mcp",
+        text: description,
+        threadId,
+      });
+
+      if (msg.id != null) {
+        socket.send({
+          id: msg.id,
+          result: {
+            success: false,
+            contentItems: [{ type: "inputText", text: description }],
+          },
+        });
+      }
+      return;
+    }
 
     // Item started - handle user messages
     if (method === "item/started") {
@@ -823,7 +887,7 @@ class MessagesStore {
     }
 
     // Approval requests (file changes, commands, etc.)
-    if (method?.includes("/requestApproval")) {
+    if (method?.includes("/requestApproval") || method === "applyPatchApproval" || method === "execCommandApproval") {
       const rpcId = msg.id as number | string | undefined;
       const itemId = this.#stableRequestItemId("approval", method, rpcId, params);
       const reason = (params.reason as string) || null;
@@ -835,10 +899,10 @@ class MessagesStore {
       let approvalType: ApprovalRequest["type"] = "other";
       let description = "";
 
-      if (method === "item/fileChange/requestApproval") {
+      if (method === "item/fileChange/requestApproval" || method === "applyPatchApproval") {
         approvalType = "file";
         description = reason || "File change requires approval";
-      } else if (method === "item/commandExecution/requestApproval") {
+      } else if (method === "item/commandExecution/requestApproval" || method === "execCommandApproval") {
         approvalType = "command";
         description = reason || "Command execution requires approval";
       } else if (method === "item/permissions/requestApproval") {
@@ -852,7 +916,10 @@ class MessagesStore {
       }
 
       // Extract richer params from command approval
-      const command = (params.command as string) || undefined;
+      const rawCommand = params.command;
+      const command = Array.isArray(rawCommand)
+        ? rawCommand.map(String).join(" ")
+        : (rawCommand as string) || undefined;
       const cwd = (params.cwd as string) || undefined;
       const grantRoot = (params.grantRoot as string) || undefined;
       const requestedPermissions =
@@ -1090,10 +1157,20 @@ class MessagesStore {
   }
 
   #extractThreadId(params: Record<string, unknown>): string | null {
-    return (params.threadId as string) || (params.thread_id as string) || null;
+    return (
+      (params.threadId as string) ||
+      (params.thread_id as string) ||
+      (params.conversationId as string) ||
+      (params.conversation_id as string) ||
+      null
+    );
   }
 
-  #loadThread(threadId: string, turns: Array<{ items?: unknown[] }>) {
+  #loadThread(
+    threadId: string,
+    turns: Array<{ items?: unknown[]; status?: string; id?: string }>,
+    _options: { authoritative?: boolean } = {},
+  ) {
     const messages: Message[] = [];
 
     for (const turn of turns) {

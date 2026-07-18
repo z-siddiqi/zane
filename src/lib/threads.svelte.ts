@@ -25,6 +25,7 @@ class ThreadsStore {
   #settings = $state<Map<string, ThreadSettings>>(new Map());
   #nextId = 1;
   #pendingRequests = new Map<number, string>();
+  #pendingThreadRequests = new Map<number, { type: string; threadId: string }>();
   #pendingStartInput: string | null = null;
   #pendingStartModel: string | null = null;
   #pendingCollaborationMode: CollaborationMode | null = null;
@@ -45,6 +46,7 @@ class ThreadsStore {
 
   constructor() {
     this.#loadSettings();
+    socket.onConnect(() => this.#reattachResumedThreads());
   }
 
   getSettings(threadId: string | null): ThreadSettings {
@@ -80,21 +82,14 @@ class ThreadsStore {
   }
 
   open(threadId: string) {
-    const id = this.#nextId++;
     const previousId = this.currentId;
     this.loading = true;
     if (previousId && previousId !== threadId) {
       socket.unsubscribeThread(previousId);
     }
     this.currentId = threadId;
-    messages.clearThread(threadId);
     socket.subscribeThread(threadId);
-    this.#pendingRequests.set(id, "resume");
-    socket.send({
-      method: "thread/resume",
-      id,
-      params: { threadId },
-    });
+    this.#resumeThread(threadId, true);
   }
 
   start(
@@ -288,6 +283,13 @@ class ThreadsStore {
         this.loading = false;
       }
 
+      if (type === "read" && msg.result) {
+        const result = msg.result as { thread?: { id: string; turns?: Array<{ items?: unknown[] }> } };
+        if (result.thread?.id && result.thread.turns) {
+          messages.hydrateThread(result.thread.id, result.thread.turns, { authoritative: true });
+        }
+      }
+
       if (type === "collaborationPresets" && msg.result) {
         const result = msg.result as { data: CollaborationModeMask[] };
         this.#collaborationPresets = result.data || [];
@@ -331,6 +333,62 @@ class ThreadsStore {
       if (type === "start") {
         this.#pendingStartModel = null;
       }
+    }
+
+    if (msg.id != null && this.#pendingThreadRequests.has(msg.id as number)) {
+      const request = this.#pendingThreadRequests.get(msg.id as number)!;
+      this.#pendingThreadRequests.delete(msg.id as number);
+      if (request.type === "resume") {
+        this.loading = false;
+        if (!msg.error && this.currentId === request.threadId) {
+          this.#readThreadHistory(request.threadId);
+        }
+      }
+      if (request.type === "read" && msg.result) {
+        const result = msg.result as { thread?: { id: string; turns?: Array<{ items?: unknown[] }> } };
+        if (result.thread?.id && result.thread.turns) {
+          messages.hydrateThread(result.thread.id, result.thread.turns, { authoritative: true });
+        }
+      }
+    }
+  }
+
+  #resumeThread(threadId: string, readHistory: boolean) {
+    const id = this.#nextId++;
+    this.#pendingThreadRequests.set(id, { type: "resume", threadId });
+    const result = socket.send({
+      method: "thread/resume",
+      id,
+      params: { threadId },
+    });
+    if (!result.success) {
+      this.#pendingThreadRequests.delete(id);
+      if (readHistory) this.#readThreadHistory(threadId);
+    }
+  }
+
+  #readThreadHistory(threadId: string) {
+    const id = this.#nextId++;
+    this.#pendingThreadRequests.set(id, { type: "read", threadId });
+    const result = socket.send({
+      method: "thread/read",
+      id,
+      params: { threadId, includeTurns: true },
+    });
+    if (!result.success) {
+      this.#pendingThreadRequests.delete(id);
+    }
+  }
+
+  #reattachResumedThreads() {
+    const threadIds = new Set(socket.subscribedThreadIds());
+    if (this.currentId) {
+      threadIds.add(this.currentId);
+    }
+
+    for (const threadId of threadIds) {
+      socket.subscribeThread(threadId);
+      this.#resumeThread(threadId, threadId === this.currentId);
     }
   }
 

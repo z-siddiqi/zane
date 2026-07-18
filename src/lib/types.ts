@@ -77,7 +77,7 @@ export interface ApprovalRequest {
   id: string;
   rpcId: number | string; // The JSON-RPC request ID to respond to
   method: string;
-  type: "command" | "file" | "permissions" | "mcp" | "elicitation" | "other";
+  type: "command" | "file" | "permissions" | "mcp" | "elicitation" | "dynamic-tool" | "other";
   description: string;
   command?: string;
   cwd?: string;

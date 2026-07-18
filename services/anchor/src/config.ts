@@ -14,9 +14,11 @@ export const APPROVAL_METHODS = new Set([
   "item/fileChange/requestApproval",
   "item/commandExecution/requestApproval",
   "item/permissions/requestApproval",
-  "item/mcpToolCall/requestApproval",
   "item/tool/requestUserInput",
   "mcpServer/elicitation/request",
+  "item/tool/call",
+  "applyPatchApproval",
+  "execCommandApproval",
 ]);
 
 export let jwtSecret = "";

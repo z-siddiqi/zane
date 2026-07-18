@@ -222,6 +222,10 @@ class SocketStore {
     return () => this.#connectHandlers.delete(handler);
   }
 
+  subscribedThreadIds(): string[] {
+    return Array.from(this.#subscribedThreads);
+  }
+
   onProtocol(handler: (msg: Record<string, unknown>) => void) {
     this.#protocolHandlers.add(handler);
     return () => this.#protocolHandlers.delete(handler);
