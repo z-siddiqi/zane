@@ -14,21 +14,17 @@ import type {
 } from "./types";
 const HEARTBEAT_INTERVAL = 30_000;
 const HEARTBEAT_TIMEOUT = 10_000;
+const RESUME_HEALTH_TIMEOUT = 5_000;
 const RECONNECT_DELAY = 2_000;
-const CLIENT_ID_KEY = "__zane_client_id__";
+const PAGE_CLIENT_ID = typeof window === "undefined" ? null : createClientId();
 
 function getClientId(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const existing = window.sessionStorage.getItem(CLIENT_ID_KEY);
-    if (existing) return existing;
-    const fallback = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const id = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : fallback;
-    window.sessionStorage.setItem(CLIENT_ID_KEY, id);
-    return id;
-  } catch {
-    return null;
-  }
+  return PAGE_CLIENT_ID;
+}
+
+function createClientId(): string {
+  const fallback = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : fallback;
 }
 
 export interface SendResult {
@@ -67,6 +63,16 @@ class SocketStore {
   #subscribedThreads = new Set<string>();
   #rpcIdCounter = 0;
   #pendingRpc = new Map<number | string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  #pageSuspended = false;
+
+  constructor() {
+    if (typeof window === "undefined") return;
+    window.addEventListener("pagehide", () => this.#suspendPage());
+    window.addEventListener("pageshow", () => this.#resumePage());
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") this.#resumePage();
+    });
+  }
 
   get url() {
     return this.#url;
@@ -474,6 +480,45 @@ class SocketStore {
   #resubscribeThreads() {
     for (const threadId of this.#subscribedThreads) {
       this.#sendRaw({ type: "orbit.subscribe", threadId });
+    }
+  }
+
+  #suspendPage() {
+    if (this.#pageSuspended) return;
+    this.#pageSuspended = true;
+    this.#intentionalDisconnect = true;
+    this.#cleanup();
+    this.status = "disconnected";
+  }
+
+  #resumePage() {
+    const wasSuspended = this.#pageSuspended;
+    this.#pageSuspended = false;
+    if (wasSuspended) this.#intentionalDisconnect = false;
+    if (this.#intentionalDisconnect || !this.#url) return;
+
+    if (this.#socket?.readyState === WebSocket.OPEN) {
+      this.#probeConnection();
+      return;
+    }
+    if (
+      this.#socket?.readyState !== WebSocket.OPEN &&
+      this.#socket?.readyState !== WebSocket.CONNECTING
+    ) {
+      this.#connect(this.#url, this.#token);
+    }
+  }
+
+  #probeConnection() {
+    this.#clearHeartbeatTimeout();
+    try {
+      this.#socket?.send(JSON.stringify({ type: "ping" }));
+      this.#heartbeatTimeout = setTimeout(() => {
+        console.warn("Connection did not recover after page became visible");
+        this.#socket?.close();
+      }, RESUME_HEALTH_TIMEOUT);
+    } catch {
+      this.#socket?.close();
     }
   }
 
