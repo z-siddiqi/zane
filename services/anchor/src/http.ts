@@ -5,6 +5,7 @@ import { PORT, startedAt, ORBIT_URL, orbitSocket, clients, appServer, appServerI
 import { parseJsonRpcMessage } from "./utils";
 import { maybeHandleAnchorLocalRpc } from "./rpc/router";
 import { ensureAppServer, sendToAppServer } from "./app-server";
+import { relaySnapshot } from "./relay-state";
 
 export const server = Bun.serve({
   port: PORT,
@@ -52,6 +53,10 @@ export const server = Bun.serve({
       try {
         const obj = JSON.parse(text) as Record<string, unknown>;
         if (typeof obj.type === "string" && (obj.type as string).startsWith("orbit.")) {
+          if (obj.type === "orbit.subscribe" && typeof obj.threadId === "string") {
+            const snapshot = relaySnapshot(obj.threadId);
+            if (snapshot) (ws as WsClient).send(JSON.stringify(snapshot));
+          }
           if (orbitSocket && orbitSocket.readyState === WebSocket.OPEN) {
             orbitSocket.send(text);
           }

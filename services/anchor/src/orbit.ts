@@ -4,14 +4,12 @@ import type { OrbitPreflightResult } from "./types";
 import {
   ORBIT_URL,
   MAX_SUBSCRIBED_THREADS,
+  anchorInstanceId,
   orbitSocket,
   orbitConnecting,
   orbitHeartbeatInterval,
   orbitHeartbeatTimeout,
   subscribedThreads,
-  pendingApprovals,
-  pendingUserMessages,
-  approvalRpcIds,
   setOrbitSocket,
   setOrbitConnecting,
   setOrbitHeartbeatInterval,
@@ -21,6 +19,7 @@ import { parseJsonRpcMessage, extractThreadId } from "./utils";
 import { maybeHandleAnchorLocalRpc } from "./rpc/router";
 import { ensureAppServer, sendToAppServer } from "./app-server";
 import { buildOrbitUrl } from "./auth/jwt";
+import { relaySnapshot } from "./relay-state";
 
 const ORBIT_RECONNECT_BASE_DELAY_MS = 2_000;
 const ORBIT_RECONNECT_MAX_DELAY_MS = 30_000;
@@ -31,13 +30,22 @@ let orbitReconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
 export function subscribeToThread(threadId: string): void {
   if (subscribedThreads.has(threadId)) return;
-  if (!orbitSocket || orbitSocket.readyState !== WebSocket.OPEN) return;
 
   subscribedThreads.add(threadId);
   if (subscribedThreads.size > MAX_SUBSCRIBED_THREADS) {
     const oldest = subscribedThreads.values().next().value;
-    if (oldest) subscribedThreads.delete(oldest);
+    if (oldest) {
+      subscribedThreads.delete(oldest);
+      if (orbitSocket?.readyState === WebSocket.OPEN) {
+        try {
+          orbitSocket.send(JSON.stringify({ type: "orbit.unsubscribe", threadId: oldest }));
+        } catch {
+          // Reconnect rebuilds the retained subscription set.
+        }
+      }
+    }
   }
+  if (!orbitSocket || orbitSocket.readyState !== WebSocket.OPEN) return;
   try {
     orbitSocket.send(JSON.stringify({ type: "orbit.subscribe", threadId }));
     console.log(`[anchor] subscribed to thread ${threadId}`);
@@ -188,6 +196,7 @@ export async function connectOrbit(): Promise<void> {
     setOrbitConnecting(false);
     ws.send(JSON.stringify({
       type: "anchor.hello",
+      id: anchorInstanceId,
       ts: new Date().toISOString(),
       hostname: hostname(),
       platform: process.platform,
@@ -213,21 +222,14 @@ export async function connectOrbit(): Promise<void> {
       return;
     }
 
-    // Handle orbit protocol messages
+    // Orbit control messages never belong on app-server's JSON-RPC stream.
     try {
       const parsed = JSON.parse(text) as Record<string, unknown>;
       if (typeof parsed.type === "string" && (parsed.type as string).startsWith("orbit.")) {
         if (parsed.type === "orbit.client-subscribed" && typeof parsed.threadId === "string") {
-          const userMessage = pendingUserMessages.get(parsed.threadId);
-          if (userMessage && orbitSocket && orbitSocket.readyState === WebSocket.OPEN) {
-            resendBufferedMessage(userMessage);
-            console.log(`[anchor] re-sent pending user message for thread ${parsed.threadId}`);
-          }
-
-          const buffered = pendingApprovals.get(parsed.threadId);
-          if (buffered && orbitSocket && orbitSocket.readyState === WebSocket.OPEN) {
-            resendBufferedMessage(buffered);
-            console.log(`[anchor] re-sent pending approval for thread ${parsed.threadId}`);
+          const snapshot = relaySnapshot(parsed.threadId);
+          if (snapshot && orbitSocket?.readyState === WebSocket.OPEN) {
+            orbitSocket.send(JSON.stringify(snapshot));
           }
         }
         return;
@@ -253,13 +255,6 @@ export async function connectOrbit(): Promise<void> {
       const threadId = extractThreadId(message);
       if (threadId) {
         subscribeToThread(threadId);
-      }
-
-      const rpcId = message.id as number | string | undefined;
-      if (rpcId != null && "result" in message && approvalRpcIds.has(rpcId)) {
-        const approvalThread = approvalRpcIds.get(rpcId)!;
-        pendingApprovals.delete(approvalThread);
-        approvalRpcIds.delete(rpcId);
       }
 
       sendToAppServer(text.trim() + "\n");
@@ -302,15 +297,4 @@ export async function connectOrbit(): Promise<void> {
     setOrbitConnecting(false);
     scheduleOrbitReconnect("socket error");
   });
-}
-
-function resendBufferedMessage(message: string): void {
-  if (!orbitSocket || orbitSocket.readyState !== WebSocket.OPEN) return;
-  try {
-    const replay = JSON.parse(message);
-    replay._replay = true;
-    orbitSocket.send(JSON.stringify(replay));
-  } catch {
-    orbitSocket.send(message);
-  }
 }

@@ -3,6 +3,7 @@
     import type { ConnectionStatus, SandboxMode } from "../types";
     import { socket } from "../socket.svelte";
     import { connectionManager } from "../connection-manager.svelte";
+    import { messages } from "../messages.svelte";
     import ShimmerDot from "./ShimmerDot.svelte";
 
     interface Props {
@@ -35,6 +36,9 @@
     const statusMeta = $derived(statusConfig[status]);
     const selectedSandbox = $derived(sandboxOptions.find((s) => s.value === sandbox) || sandboxOptions[1]);
     const canReconnect = $derived(status === "error" || status === "disconnected");
+    const pendingRequests = $derived(messages.pendingThreadRequests);
+    const pendingRequestCount = $derived(pendingRequests.reduce((total, pending) => total + pending.count, 0));
+    const pendingRequestThreadId = $derived(pendingRequests[0]?.threadId ?? null);
 
     function handleClickOutside(e: MouseEvent) {
         const target = e.target as HTMLElement;
@@ -86,6 +90,18 @@
         {#if threadId}
             <span class="separator">·</span>
             <span class="thread-id">{threadId.slice(0, 8)}</span>
+        {/if}
+
+        {#if pendingRequestThreadId && pendingRequestCount > 0}
+            <a
+                class="pending-request"
+                href={`/thread/${pendingRequestThreadId}`}
+                title={`${pendingRequestCount} request${pendingRequestCount === 1 ? "" : "s"} waiting for input`}
+            >
+                <span aria-hidden="true">!</span>
+                <span>{pendingRequestCount}</span>
+                <span class="pending-label">waiting</span>
+            </a>
         {/if}
 
         {#if sandbox && onSandboxChange}
@@ -226,6 +242,32 @@
 
     .spacer {
         flex: 1;
+    }
+
+    .pending-request {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+        padding: var(--space-xs) var(--space-sm);
+        border: 1px solid var(--cli-warning);
+        border-radius: var(--radius-sm);
+        color: var(--cli-warning);
+        font-size: var(--text-xs);
+        text-decoration: none;
+    }
+
+    .pending-request:hover {
+        background: var(--cli-selection);
+    }
+
+    .pending-label {
+        display: none;
+    }
+
+    @media (min-width: 640px) {
+        .pending-label {
+            display: inline;
+        }
     }
 
     /* Sandbox dropdown */

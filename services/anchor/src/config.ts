@@ -7,19 +7,9 @@ export const AUTH_URL = process.env.AUTH_URL ?? "";
 export const FORCE_LOGIN = process.env.ZANE_FORCE_LOGIN === "1";
 export const CREDENTIALS_FILE = process.env.ZANE_CREDENTIALS_FILE ?? "";
 export const startedAt = Date.now();
+export const anchorInstanceId = crypto.randomUUID();
 
 export const MAX_SUBSCRIBED_THREADS = 1000;
-
-export const APPROVAL_METHODS = new Set([
-  "item/fileChange/requestApproval",
-  "item/commandExecution/requestApproval",
-  "item/permissions/requestApproval",
-  "item/tool/requestUserInput",
-  "mcpServer/elicitation/request",
-  "item/tool/call",
-  "applyPatchApproval",
-  "execCommandApproval",
-]);
 
 export let jwtSecret = "";
 export let userId: string | undefined;
@@ -33,9 +23,6 @@ export function setUserId(id: string | undefined): void {
 
 export const clients = new Set<WsClient>();
 export const subscribedThreads = new Set<string>();
-export const pendingApprovals = new Map<string, string>();
-export const pendingUserMessages = new Map<string, string>();
-export const approvalRpcIds = new Map<number | string, string>();
 
 export let appServer: Bun.Subprocess | null = null;
 export let appServerStarting = false;

@@ -11,13 +11,10 @@ import {
   setWarnedNoAppServer,
   clients,
   orbitSocket,
-  pendingApprovals,
-  pendingUserMessages,
-  approvalRpcIds,
-  APPROVAL_METHODS,
 } from "./config";
 import { parseJsonRpcMessage, extractThreadId } from "./utils";
 import { subscribeToThread } from "./orbit";
+import { clearRelaySnapshots, recordRelayMessage } from "./relay-state";
 
 const MAX_QUEUED_PAYLOADS = 500;
 const queuedPayloads: string[] = [];
@@ -90,12 +87,18 @@ export function ensureAppServer(): void {
 
     proc.exited.then((code) => {
       console.warn(`[anchor] app-server exited with code ${code}`);
+      if (orbitSocket?.readyState === WebSocket.OPEN) {
+        try {
+          orbitSocket.send(JSON.stringify({ type: "anchor.app-server-reset" }));
+        } catch {
+          // A replacement Anchor process will also invalidate these requests.
+        }
+      }
       setAppServer(null);
       setAppServerInitialized(false);
       setAppServerInitializeId(null);
       queuedPayloads.length = 0;
-      pendingApprovals.clear();
-      approvalRpcIds.clear();
+      clearRelaySnapshots();
     });
 
     streamLines(proc.stdout, (line) => {
@@ -109,20 +112,7 @@ export function ensureAppServer(): void {
         if (threadId) {
           subscribeToThread(threadId);
         }
-
-        const method = parsed.method as string | undefined;
-        if (method === "item/started" && threadId && isUserMessageItem(parsed)) {
-          pendingUserMessages.set(threadId, line);
-        }
-
-        if (method && APPROVAL_METHODS.has(method) && threadId) {
-          pendingApprovals.set(threadId, line);
-          const rpcId = parsed.id as number | string | undefined;
-          if (rpcId != null) approvalRpcIds.set(rpcId, threadId);
-        } else if (method === "turn/completed" && threadId) {
-          pendingApprovals.delete(threadId);
-          pendingUserMessages.delete(threadId);
-        }
+        recordRelayMessage(parsed);
       }
 
       for (const client of clients) {
@@ -194,14 +184,6 @@ function handleInitializeResponse(message: Record<string, unknown>): boolean {
   console.log("[anchor] app-server initialized");
   flushQueuedPayloads();
   return true;
-}
-
-function isUserMessageItem(message: Record<string, unknown>): boolean {
-  const params = message.params;
-  if (!params || typeof params !== "object" || Array.isArray(params)) return false;
-  const item = (params as Record<string, unknown>).item;
-  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
-  return (item as Record<string, unknown>).type === "userMessage";
 }
 
 function isWritableStream(input: unknown): input is WritableStream<Uint8Array> {
