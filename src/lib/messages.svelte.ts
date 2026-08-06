@@ -1,1332 +1,699 @@
-import type { Message, RpcMessage, ApprovalRequest, UserInputRequest, UserInputQuestion, TurnStatus, PlanStep, CollaborationMode } from "./types";
+import type {
+  ApprovalRequest,
+  CollaborationMode,
+  Message,
+  MessageKind,
+  PlanStep,
+  RpcMessage,
+  TurnStatus,
+  UserInputQuestion,
+  UserInputRequest,
+} from "./types";
+import {
+  appendItemDelta,
+  completeItem,
+  completeTurn,
+  createThreadTranscript,
+  hydrateTranscript,
+  removeTranscriptMessage,
+  restorePartialItem,
+  startItem,
+  startTurn,
+  upsertTranscriptMessage,
+  type ThreadTranscript,
+  type ThreadTurnSnapshot,
+} from "./thread-transcript";
 import { codexTextInput } from "./codex-input";
 import { socket } from "./socket.svelte";
 import { threads } from "./threads.svelte";
 
 const STORE_KEY = "__zane_messages_store__";
 
-type ReasoningMode = "summary" | "raw";
-interface ReasoningState {
-  buffer: string;
-  full: string;
-  mode: ReasoningMode | null;
-  header: string | null;
+interface ThreadPresentation {
+  plan: PlanStep[];
+  planExplanation: string | null;
+  statusDetail: string | null;
+  reasoningItemId: string | null;
+}
+
+interface RawThreadTurn {
+  id?: string;
+  status?: string;
+  items?: unknown[];
+}
+
+export interface PendingThreadRequest {
+  count: number;
+  threadId: string;
 }
 
 type TurnCompleteCallback = (threadId: string, finalText: string) => void;
 
 class MessagesStore {
-  #byThread = $state<Map<string, Message[]>>(new Map());
-  #streamingText = $state<Map<string, string>>(new Map());
-  #loadedThreads = new Set<string>();
-  #pendingApprovals = $state<Map<string, ApprovalRequest>>(new Map());
-  #pendingLiveMessages = new Map<string, Message>(); // survives clearThread for replay preservation
-  #reasoningByThread = new Map<string, ReasoningState>();
+  #transcripts = $state<Map<string, ThreadTranscript>>(new Map());
+  #presentation = $state<Map<string, ThreadPresentation>>(new Map());
+  #interruptPending = new Set<string>();
   #execCommands = new Map<string, string>();
   #turnCompleteCallbacks = new Map<string, TurnCompleteCallback>();
-  #pendingAgentMessageIds = new Map<string, string>();
 
-  // Streaming reasoning state (reactive, per thread)
-  #streamingReasoningTextByThread = $state<Map<string, string>>(new Map());
-  #isReasoningStreamingByThread = $state<Map<string, boolean>>(new Map());
+  get current(): Message[] {
+    return this.#transcript(threads.currentId)?.messages ?? [];
+  }
 
-  // Turn state (per thread)
-  #turnIdByThread = $state<Map<string, string>>(new Map());
-  #turnStatusByThread = $state<Map<string, TurnStatus>>(new Map());
-  #interruptPendingByThread = new Set<string>();
-  #planByThread = $state<Map<string, PlanStep[]>>(new Map());
-  #planExplanationByThread = $state<Map<string, string | null>>(new Map());
-  #statusDetailByThread = $state<Map<string, string | null>>(new Map());
+  get turnStatus(): TurnStatus | null {
+    return this.#transcript(threads.currentId)?.turnStatus ?? null;
+  }
 
-  get turnStatus() {
-    const threadId = threads.currentId;
-    if (!threadId) return null;
-    return this.#turnStatusByThread.get(threadId) ?? null;
+  get plan(): PlanStep[] {
+    return this.#view(threads.currentId).plan;
   }
-  get plan() {
-    const threadId = threads.currentId;
-    if (!threadId) return [];
-    return this.#planByThread.get(threadId) ?? [];
+
+  get planExplanation(): string | null {
+    return this.#view(threads.currentId).planExplanation;
   }
-  get planExplanation() {
-    const threadId = threads.currentId;
-    if (!threadId) return null;
-    return this.#planExplanationByThread.get(threadId) ?? null;
+
+  get statusDetail(): string | null {
+    return this.#view(threads.currentId).statusDetail;
   }
-  get statusDetail() {
-    const threadId = threads.currentId;
-    if (!threadId) return null;
-    return this.#statusDetailByThread.get(threadId) ?? null;
+
+  get isReasoningStreaming(): boolean {
+    return this.#view(threads.currentId).reasoningItemId !== null;
   }
-  get isReasoningStreaming() {
+
+  get streamingReasoningText(): string {
     const threadId = threads.currentId;
-    if (!threadId) return false;
-    return this.#isReasoningStreamingByThread.get(threadId) ?? false;
+    const itemId = this.#view(threadId).reasoningItemId;
+    if (!threadId || !itemId) return "";
+    return this.#transcript(threadId)?.messages.find((message) => message.id === itemId)?.text ?? "";
   }
-  get streamingReasoningText() {
-    const threadId = threads.currentId;
-    if (!threadId) return "";
-    return this.#streamingReasoningTextByThread.get(threadId) ?? "";
+
+  get pendingThreadRequests(): PendingThreadRequest[] {
+    const pending: PendingThreadRequest[] = [];
+    for (const [threadId, transcript] of this.#transcripts) {
+      const count = transcript.messages.filter((message) =>
+        message.approval?.status === "pending" ||
+        message.userInputRequest?.status === "pending").length;
+      if (count > 0) pending.push({ threadId, count });
+    }
+    return pending;
+  }
+
+  getThreadMessages(threadId: string | null): Message[] {
+    return this.#transcript(threadId)?.messages ?? [];
+  }
+
+  getLatestAssistantMessage(threadId: string | null): Message | null {
+    const messages = this.getThreadMessages(threadId);
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === "assistant" && messages[index].kind !== "reasoning") {
+        return messages[index];
+      }
+    }
+    return null;
+  }
+
+  hydrateThread(threadId: string, turns: RawThreadTurn[]): void {
+    const normalized: ThreadTurnSnapshot[] = turns.map((turn) => ({
+      id: turn.id,
+      status: turn.status,
+      items: turn.items?.filter(isRecord),
+    }));
+    this.#setTranscript(threadId, hydrateTranscript(this.#ensureTranscript(threadId), normalized));
+    if (this.#transcript(threadId)?.turnStatus !== "InProgress") {
+      this.#interruptPending.delete(threadId);
+      this.#setView(threadId, { reasoningItemId: null, statusDetail: null });
+    }
+  }
+
+  clearThread(threadId: string): void {
+    this.#setTranscript(threadId, createThreadTranscript(threadId));
+    this.#presentation = new Map(this.#presentation).set(threadId, emptyPresentation());
+    this.#interruptPending.delete(threadId);
   }
 
   steer(threadId: string, text: string): { success: boolean; error?: string } {
-    const turnId = this.#turnIdByThread.get(threadId);
-    const turnStatus = this.#turnStatusByThread.get(threadId) ?? null;
-    if (!turnId || (turnStatus ?? "").toLowerCase() !== "inprogress") {
+    const transcript = this.#transcript(threadId);
+    if (!transcript?.activeTurnId || transcript.turnStatus !== "InProgress") {
       return { success: false, error: "No active turn to steer" };
     }
-
     return socket.send({
       method: "turn/steer",
       id: Date.now(),
       params: {
         threadId,
         input: [codexTextInput(text)],
-        expectedTurnId: turnId,
+        expectedTurnId: transcript.activeTurnId,
       },
     });
   }
 
   interrupt(threadId: string): { success: boolean; error?: string } {
-    const turnId = this.#turnIdByThread.get(threadId);
-    const turnStatus = this.#turnStatusByThread.get(threadId) ?? null;
-    if (!turnId || (turnStatus ?? "").toLowerCase() !== "inprogress") {
+    const transcript = this.#transcript(threadId);
+    if (!transcript?.activeTurnId || transcript.turnStatus !== "InProgress") {
       return { success: true };
     }
-    if (this.#interruptPendingByThread.has(threadId)) {
-      return { success: true };
-    }
+    if (this.#interruptPending.has(threadId)) return { success: true };
 
     const result = socket.send({
       method: "turn/interrupt",
       id: Date.now(),
-      params: { threadId, turnId },
+      params: { threadId, turnId: transcript.activeTurnId },
     });
-
-    if (result.success) {
-      this.#interruptPendingByThread.add(threadId);
-    }
+    if (result.success) this.#interruptPending.add(threadId);
     return result;
   }
 
   onTurnComplete(threadId: string, callback: TurnCompleteCallback): () => void {
     this.#turnCompleteCallbacks.set(threadId, callback);
-    return () => {
-      this.#turnCompleteCallbacks.delete(threadId);
-    };
+    return () => this.#turnCompleteCallbacks.delete(threadId);
   }
 
-  clearThread(threadId: string) {
-    this.#byThread.delete(threadId);
-    this.#loadedThreads.delete(threadId);
-    this.#interruptPendingByThread.delete(threadId);
-    for (const key of this.#streamingText.keys()) {
-      if (key.startsWith(`${threadId}:`)) {
-        this.#streamingText.delete(key);
-      }
-    }
+  approve(approvalId: string, forSession = false, _collaborationMode?: CollaborationMode): void {
+    const found = this.#findApproval(approvalId);
+    if (!found || found.approval.status !== "pending") return;
+    const result = socket.send({
+      id: found.approval.rpcId,
+      result: approvalAcceptResult(found.approval, forSession),
+    });
+    if (result.success) this.#resolveRequest(found.threadId, found.messageId);
   }
 
-  hydrateThread(
-    threadId: string,
-    turns: Array<{ items?: unknown[]; status?: string; id?: string }>,
-    options: { authoritative?: boolean } = {},
-  ) {
-    if (turns.length === 0 && this.#loadedThreads.has(threadId)) {
-      return;
-    }
-    this.#loadedThreads.add(threadId);
-    this.#loadThread(threadId, turns, options);
+  decline(approvalId: string, _collaborationMode?: CollaborationMode): void {
+    const found = this.#findApproval(approvalId);
+    if (!found || found.approval.status !== "pending") return;
+    const result = socket.send({
+      id: found.approval.rpcId,
+      result: approvalRejectResult(found.approval, "decline"),
+    });
+    if (result.success) this.#resolveRequest(found.threadId, found.messageId);
   }
 
-  #mergeThreadSnapshot(threadId: string, snapshot: Message[]): Message[] {
-    const merged: Message[] = [];
-    const existing = this.#byThread.get(threadId) ?? [];
-    const snapshotIds = new Set(snapshot.map((message) => message.id));
-
-    const push = (message: Message, replaceExisting: boolean) => {
-      const idx = merged.findIndex((m) => m.id === message.id);
-      if (idx >= 0) {
-        if (replaceExisting) {
-          merged[idx] = { ...merged[idx], ...message };
-        }
-        return;
-      }
-      merged.push(message);
-    };
-
-    for (const message of snapshot) {
-      push(message, true);
-      this.#clearStreaming(threadId, message.id);
-    }
-
-    for (const message of existing) {
-      push(message, !snapshotIds.has(message.id));
-    }
-
-    for (const [id, message] of this.#pendingLiveMessages) {
-      if (message.threadId === threadId) {
-        push({ ...message, id }, !snapshotIds.has(id));
-      }
-    }
-
-    return merged;
+  cancel(approvalId: string): void {
+    const found = this.#findApproval(approvalId);
+    if (!found || found.approval.status !== "pending") return;
+    const result = socket.send({
+      id: found.approval.rpcId,
+      result: approvalRejectResult(found.approval, "cancel"),
+    });
+    if (result.success) this.#resolveRequest(found.threadId, found.messageId);
   }
 
-  #stableRequestItemId(
-    prefix: string,
-    method: string,
-    rpcId: number | string | undefined,
-    params: Record<string, unknown>,
-  ): string {
-    const explicit =
-      (params.approvalId as string | undefined) ||
-      (params.itemId as string | undefined) ||
-      (params.item_id as string | undefined);
-    if (explicit) return explicit;
-    if (rpcId != null) return `${prefix}-${method}-${String(rpcId)}`;
-    return `${prefix}-${Date.now()}`;
-  }
-
-  get current(): Message[] {
+  respondToUserInput(
+    messageId: string,
+    answers: Record<string, string[]>,
+    collaborationMode?: CollaborationMode,
+  ): void {
     const threadId = threads.currentId;
-    if (!threadId) return [];
-    return this.#byThread.get(threadId) ?? [];
-  }
-
-  getThreadMessages(threadId: string | null): Message[] {
-    if (!threadId) return [];
-    return this.#byThread.get(threadId) ?? [];
-  }
-
-  getLatestAssistantMessage(threadId: string | null): Message | null {
-    const messages = this.getThreadMessages(threadId);
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const msg = messages[i];
-      if (msg.role === "assistant") return msg;
-    }
-    return null;
-  }
-
-  approve(approvalId: string, forSession = false, _collaborationMode?: CollaborationMode) {
-    const approval = this.#pendingApprovals.get(approvalId);
-    if (!approval || approval.status !== "pending") return;
-
-    approval.status = "approved";
-    this.#pendingApprovals = new Map(this.#pendingApprovals);
-    this.#updateApprovalInMessages(approvalId, "approved");
-
-    socket.send({
-      id: approval.rpcId,
-      result: this.#approvalAcceptResult(approval, forSession),
-    });
-  }
-
-  decline(approvalId: string, _collaborationMode?: CollaborationMode) {
-    const approval = this.#pendingApprovals.get(approvalId);
-    if (!approval || approval.status !== "pending") return;
-
-    approval.status = "declined";
-    this.#pendingApprovals = new Map(this.#pendingApprovals);
-    this.#updateApprovalInMessages(approvalId, "declined");
-
-    socket.send({
-      id: approval.rpcId,
-      result: this.#approvalRejectResult(approval, "decline"),
-    });
-  }
-
-  cancel(approvalId: string) {
-    const approval = this.#pendingApprovals.get(approvalId);
-    if (!approval || approval.status !== "pending") return;
-
-    approval.status = "cancelled";
-    this.#pendingApprovals = new Map(this.#pendingApprovals);
-    this.#updateApprovalInMessages(approvalId, "cancelled");
-
-    socket.send({
-      id: approval.rpcId,
-      result: this.#approvalRejectResult(approval, "cancel"),
-    });
-  }
-
-  #approvalAcceptResult(approval: ApprovalRequest, forSession: boolean): Record<string, unknown> {
-    if (approval.method === "item/permissions/requestApproval") {
-      return {
-        permissions: this.#grantedPermissions(approval.requestedPermissions),
-        scope: forSession ? "session" : "turn",
-      };
-    }
-
-    if (approval.method === "mcpServer/elicitation/request") {
-      return { action: "accept", content: {}, _meta: null };
-    }
-
-    if (approval.method === "applyPatchApproval" || approval.method === "execCommandApproval") {
-      return { decision: forSession ? "approved_for_session" : "approved" };
-    }
-
-    if (approval.method === "item/fileChange/requestApproval" || approval.method === "item/commandExecution/requestApproval") {
-      return { decision: forSession ? "acceptForSession" : "accept" };
-    }
-
-    return { decision: forSession ? "acceptForSession" : "accept" };
-  }
-
-  #approvalRejectResult(approval: ApprovalRequest, action: "decline" | "cancel"): Record<string, unknown> {
-    if (approval.method === "item/permissions/requestApproval") {
-      return { permissions: {}, scope: "turn" };
-    }
-
-    if (approval.method === "mcpServer/elicitation/request") {
-      return { action, content: null, _meta: null };
-    }
-
-    if (approval.method === "applyPatchApproval" || approval.method === "execCommandApproval") {
-      return { decision: action === "cancel" ? "abort" : "denied" };
-    }
-
-    return { decision: action };
-  }
-
-  #grantedPermissions(requestedPermissions: Record<string, unknown> | undefined): Record<string, unknown> {
-    if (!requestedPermissions) return {};
-
-    const granted: Record<string, unknown> = {};
-    const network = requestedPermissions.network;
-    const fileSystem = requestedPermissions.fileSystem ?? requestedPermissions.file_system;
-
-    if (network && typeof network === "object") {
-      granted.network = network;
-    }
-    if (fileSystem && typeof fileSystem === "object") {
-      granted.fileSystem = fileSystem;
-    }
-
-    return granted;
-  }
-
-  respondToUserInput(messageId: string, answers: Record<string, string[]>, collaborationMode?: CollaborationMode) {
-    this.#pendingLiveMessages.delete(messageId);
-
-    const threadId = threads.currentId;
-    if (!threadId) return;
-
-    const msgs = this.#byThread.get(threadId) ?? [];
-    const idx = msgs.findIndex((m) => m.id === messageId);
-    if (idx < 0) return;
-    const msg = msgs[idx];
-    if (!msg.userInputRequest || msg.userInputRequest.status !== "pending") return;
+    const message = this.#transcript(threadId)?.messages.find((candidate) => candidate.id === messageId);
+    if (!threadId || message?.userInputRequest?.status !== "pending") return;
 
     const formattedAnswers: Record<string, { answers: string[] }> = {};
     for (const [questionId, selected] of Object.entries(answers)) {
       formattedAnswers[questionId] = { answers: selected };
     }
-
-    socket.send({
-      id: msg.userInputRequest.rpcId,
+    const result = socket.send({
+      id: message.userInputRequest.rpcId,
       result: { answers: formattedAnswers, ...(collaborationMode ? { collaborationMode } : {}) },
     });
-
-    const updated = [...msgs];
-    updated[idx] = {
-      ...msgs[idx],
-      userInputRequest: { ...msgs[idx].userInputRequest!, status: "answered" },
-    };
-    this.#byThread = new Map(this.#byThread).set(threadId, updated);
+    if (result.success) this.#resolveRequest(threadId, messageId);
   }
 
-  approvePlan(messageId: string) {
+  approvePlan(messageId: string): void {
     const threadId = threads.currentId;
     if (!threadId) return;
-
-    const msgs = this.#byThread.get(threadId) ?? [];
-    const idx = msgs.findIndex((m) => m.id === messageId);
-    if (idx < 0) return;
-
-    const updated = [...msgs];
-    updated[idx] = { ...msgs[idx], planStatus: "approved" };
-    this.#byThread = new Map(this.#byThread).set(threadId, updated);
+    const transcript = this.#ensureTranscript(threadId);
+    const message = transcript.messages.find((candidate) => candidate.id === messageId);
+    if (!message) return;
+    this.#setTranscript(threadId, upsertTranscriptMessage(transcript, { ...message, planStatus: "approved" }, message.turnId));
   }
 
-  #updateApprovalInMessages(approvalId: string, status: "approved" | "declined" | "cancelled") {
-    this.#pendingLiveMessages.delete(`approval-${approvalId}`);
+  handleMessage(message: RpcMessage): void {
+    if (this.#handleHostRequest(message)) return;
 
-    const threadId = threads.currentId;
+    if (message.result && !message.method) {
+      const result = isRecord(message.result) ? message.result : null;
+      const thread = isRecord(result?.thread) ? result.thread : null;
+      if (typeof thread?.id === "string" && Array.isArray(thread.turns)) {
+        this.hydrateThread(thread.id, thread.turns.filter(isRecord));
+      }
+      return;
+    }
+
+    const method = message.method;
+    const params = isRecord(message.params) ? message.params : null;
+    if (!method || !params) return;
+    const threadId = extractThreadId(params);
     if (!threadId) return;
+    const turnId = extractTurnId(params);
 
-    const messages = this.#byThread.get(threadId) ?? [];
-    let changed = false;
-    const updated = messages.map((message) => {
-      if (message.approval?.id !== approvalId) return message;
-      changed = true;
-      return {
-        ...message,
-        approval: { ...message.approval, status },
-      };
-    });
-
-    if (changed) {
-      this.#byThread = new Map(this.#byThread).set(threadId, updated);
-    }
-  }
-
-  #add(threadId: string, message: Message) {
-    const existing = this.#byThread.get(threadId) ?? [];
-    if (existing.some((m) => m.id === message.id)) {
-      return;
-    }
-    this.#byThread.set(threadId, [...existing, message]);
-    this.#byThread = new Map(this.#byThread);
-  }
-
-  #addUserMessage(threadId: string, message: Message) {
-    const existing = this.#byThread.get(threadId) ?? [];
-    if (existing.some((m) => m.id === message.id)) {
-      return;
-    }
-
-    const streamingIdx = existing.findIndex(
-      (m) => m.role === "assistant" && this.#streamingText.has(`${threadId}:${m.id}`),
-    );
-    const next = [...existing];
-    next.splice(streamingIdx >= 0 ? streamingIdx : existing.length, 0, message);
-    this.#byThread = new Map(this.#byThread).set(threadId, next);
-  }
-
-  #upsert(threadId: string, message: Message) {
-    const existing = this.#byThread.get(threadId) ?? [];
-    const idx = existing.findIndex((m) => m.id === message.id);
-    if (idx >= 0) {
-      const updated = [...existing];
-      updated[idx] = { ...updated[idx], ...message };
-      this.#byThread = new Map(this.#byThread).set(threadId, updated);
-      return;
-    }
-    this.#byThread.set(threadId, [...existing, message]);
-    this.#byThread = new Map(this.#byThread);
-  }
-
-  #remove(threadId: string, messageId: string) {
-    const existing = this.#byThread.get(threadId) ?? [];
-    const idx = existing.findIndex((m) => m.id === messageId);
-    if (idx < 0) return;
-    const updated = [...existing];
-    updated.splice(idx, 1);
-    this.#byThread = new Map(this.#byThread).set(threadId, updated);
-  }
-
-  #appendToMessage(threadId: string, itemId: string, delta: string, role: Message["role"], kind?: Message["kind"]) {
-    const key = `${threadId}:${itemId}`;
-    const current = this.#streamingText.get(key) ?? "";
-    this.#streamingText.set(key, current + delta);
-    this.#streamingText = new Map(this.#streamingText);
-
-    const messages = this.#byThread.get(threadId) ?? [];
-    const idx = messages.findIndex((m) => m.id === itemId);
-    const nextText = this.#streamingText.get(key) ?? "";
-
-    if (idx >= 0) {
-      const updated = [...messages];
-      updated[idx] = { ...messages[idx], text: nextText };
-      this.#byThread = new Map(this.#byThread).set(threadId, updated);
-    } else {
-      this.#upsert(threadId, {
-        id: itemId,
-        role,
-        kind,
-        text: nextText,
-        threadId,
-      });
-    }
-  }
-
-  #updateStreaming(threadId: string, itemId: string, delta: string) {
-    this.#appendToMessage(threadId, itemId, delta, "assistant");
-  }
-
-  #updateStreamingTool(threadId: string, itemId: string, delta: string, kind?: Message["kind"]) {
-    const messages = this.#byThread.get(threadId) ?? [];
-    const idx = messages.findIndex((m) => m.id === itemId);
-
-    if (idx >= 0) {
-      this.#appendToMessage(threadId, itemId, delta, messages[idx].role, messages[idx].kind ?? kind);
-      return;
-    }
-    this.#appendToMessage(threadId, itemId, delta, "tool", kind);
-  }
-
-  #clearStreaming(threadId: string, itemId: string) {
-    const key = `${threadId}:${itemId}`;
-    if (this.#streamingText.delete(key)) {
-      this.#streamingText = new Map(this.#streamingText);
-    }
-  }
-
-  #getReasoningState(threadId: string): ReasoningState {
-    const existing = this.#reasoningByThread.get(threadId);
-    if (existing) return existing;
-    const next: ReasoningState = { buffer: "", full: "", mode: null, header: null };
-    this.#reasoningByThread.set(threadId, next);
-    return next;
-  }
-
-  #resetReasoningState(threadId: string) {
-    this.#reasoningByThread.set(threadId, { buffer: "", full: "", mode: null, header: null });
-    this.#isReasoningStreamingByThread = new Map(this.#isReasoningStreamingByThread).set(threadId, false);
-    this.#streamingReasoningTextByThread = new Map(this.#streamingReasoningTextByThread).set(threadId, "");
-  }
-
-  #appendReasoningDelta(threadId: string, delta: string, mode: ReasoningMode) {
-    const state = this.#getReasoningState(threadId);
-    if (state.mode === "raw" && mode === "summary") return;
-    if (!state.mode || mode === "raw") {
-      state.mode = mode;
-    }
-
-    state.buffer += delta;
-
-    // Update reactive streaming state
-    this.#isReasoningStreamingByThread = new Map(this.#isReasoningStreamingByThread).set(threadId, true);
-    this.#streamingReasoningTextByThread = new Map(this.#streamingReasoningTextByThread).set(threadId, state.full + state.buffer);
-
-    const header = this.#extractFirstBold(state.buffer);
-    if (header) {
-      state.header = header;
-      this.#statusDetailByThread = new Map(this.#statusDetailByThread).set(threadId, header);
-    }
-  }
-
-  #reasoningSectionBreak(threadId: string) {
-    const state = this.#getReasoningState(threadId);
-    if (state.buffer) {
-      state.full += state.buffer;
-      state.buffer = "";
-    }
-    state.full += "\n\n";
-    this.#streamingReasoningTextByThread = new Map(this.#streamingReasoningTextByThread).set(threadId, state.full);
-  }
-
-  #finaliseReasoning(threadId: string, item: Record<string, unknown>) {
-    const state = this.#getReasoningState(threadId);
-    if (state.buffer) {
-      state.full += state.buffer;
-      state.buffer = "";
-    }
-
-    const fromItem = this.#reasoningTextFromItem(item);
-    const full = state.full.trim().length > 0 ? state.full : fromItem;
-
-    state.full = "";
-    state.mode = null;
-    state.header = null;
-
-    // Reset streaming state
-    this.#isReasoningStreamingByThread = new Map(this.#isReasoningStreamingByThread).set(threadId, false);
-    this.#streamingReasoningTextByThread = new Map(this.#streamingReasoningTextByThread).set(threadId, "");
-
-    const summary = this.#extractReasoningSummary(full);
-    if (!summary) return;
-
-    const itemId = (item.id as string) || `reasoning-${threadId}-${Date.now()}`;
-    this.#upsert(threadId, {
-      id: itemId,
-      role: "assistant",
-      kind: "reasoning",
-      text: summary,
-      threadId,
-    });
-  }
-
-  #reasoningTextFromItem(item: Record<string, unknown>): string {
-    const summary = Array.isArray(item.summary) ? item.summary.join("") : "";
-    const content = Array.isArray(item.content) ? item.content.join("") : "";
-    return (content || summary).trim();
-  }
-
-  #extractFirstBold(text: string): string | null {
-    const match = text.match(/\*\*(.+?)\*\*/s);
-    return match?.[1]?.trim() || null;
-  }
-
-  #extractReasoningSummary(text: string): string {
-    const trimmed = text.trim();
-    if (!trimmed) return "";
-    const open = trimmed.indexOf("**");
-    if (open >= 0) {
-      const afterOpen = trimmed.slice(open + 2);
-      const close = afterOpen.indexOf("**");
-      if (close >= 0) {
-        const afterCloseIdx = open + 2 + close + 2;
-        if (afterCloseIdx < trimmed.length) {
-          return trimmed.slice(afterCloseIdx).trim();
-        }
-      }
-    }
-    return trimmed;
-  }
-
-  handleMessage(msg: RpcMessage) {
-    if (msg.method === "account/chatgptAuthTokens/refresh") {
-      if (msg.id != null) {
-        socket.send({
-          id: msg.id,
-          error: {
-            code: -32000,
-            message: "Zane cannot refresh ChatGPT auth tokens yet.",
-          },
+    if (method === "zane/thread/replay") {
+      if (!turnId || !Array.isArray(params.items)) return;
+      let transcript = startTurn(this.#ensureTranscript(threadId), turnId);
+      for (const rawItem of params.items) {
+        if (!isRecord(rawItem)) continue;
+        const itemId = firstString(rawItem.itemId, rawItem.item_id);
+        const role = rawItem.role;
+        if (!itemId || (role !== "user" && role !== "assistant" && role !== "tool")) continue;
+        const kind = typeof rawItem.kind === "string" ? rawItem.kind as MessageKind : undefined;
+        transcript = restorePartialItem(transcript, {
+          itemId,
+          turnId,
+          role,
+          kind,
+          text: stringValue(rawItem.text),
         });
+        if (kind === "reasoning") this.#setView(threadId, { reasoningItemId: itemId });
       }
+      this.#setTranscript(threadId, transcript);
       return;
     }
 
-    if (msg.method === "attestation/generate") {
-      if (msg.id != null) {
-        socket.send({
-          id: msg.id,
-          error: {
-            code: -32000,
-            message: "Zane cannot generate client attestation yet.",
-          },
-        });
-      }
-      return;
-    }
-
-    if (msg.result && !msg.method) {
-      const result = msg.result as { thread?: { id: string; turns?: Array<{ items?: unknown[] }> } };
-      if (result.thread?.turns) {
-        this.hydrateThread(result.thread.id, result.thread.turns, { authoritative: true });
-      }
-      return;
-    }
-
-    const method = msg.method;
-    const params = msg.params as Record<string, unknown> | undefined;
-    if (!params) return;
-
-    const threadId = this.#extractThreadId(params);
-    if (!threadId) return;
-
-    if (method === "item/tool/call") {
-      const callId = (params.callId as string) || (params.call_id as string) || `dynamic-tool-${Date.now()}`;
-      const tool = (params.tool as string) || "dynamic tool";
-      const namespace = (params.namespace as string | null) || null;
-      const description = `${namespace ? `${namespace}.` : ""}${tool} is not available in Zane yet.`;
-
-      this.#add(threadId, {
-        id: `dynamic-tool-${callId}`,
-        role: "tool",
-        kind: "mcp",
-        text: description,
-        threadId,
-      });
-
-      if (msg.id != null) {
-        socket.send({
-          id: msg.id,
-          result: {
-            success: false,
-            contentItems: [{ type: "inputText", text: description }],
-          },
-        });
-      }
-      return;
-    }
-
-    // Item started - handle user messages
-    if (method === "item/started") {
-      const item = params.item as Record<string, unknown>;
-      if (!item) return;
-
-      const type = item.type as string;
-      if (type === "userMessage") {
-        const itemId = item.id as string;
-        const content = item.content as Array<{ type: string; text?: string }>;
-        const text = content?.find((c) => c.type === "text")?.text || "";
-        const confirmed: Message = {
-          id: itemId,
-          role: "user",
-          text,
-          threadId,
-        };
-
-        this.#addUserMessage(threadId, confirmed);
-      } else if (type === "commandExecution") {
-        const itemId = item.id as string;
-        const command = (item.command as string) || "";
-        if (itemId && command) {
-          this.#execCommands.set(itemId, command);
-        }
-      }
-      return;
-    }
-
-    // Agent message delta (streaming)
-    if (method === "item/agentMessage/delta") {
-      const delta = (params.delta as string) || "";
-      const providedId = (params.itemId as string) || (params.item_id as string);
-      const itemId = providedId || `agent-${threadId}`;
-      if (!providedId) {
-        this.#pendingAgentMessageIds.set(threadId, itemId);
-      }
-      this.#updateStreaming(threadId, itemId, delta);
-      return;
-    }
-
-    // Reasoning summary delta
-    if (method === "item/reasoning/summaryTextDelta") {
-      const delta = (params.delta as string) || "";
-      if (delta) {
-        this.#appendReasoningDelta(threadId, delta, "summary");
-      }
-      return;
-    }
-
-    // Reasoning content delta (raw)
-    if (method === "item/reasoning/textDelta") {
-      const delta = (params.delta as string) || "";
-      if (delta) {
-        this.#appendReasoningDelta(threadId, delta, "raw");
-      }
-      return;
-    }
-
-    // Reasoning section break
-    if (method === "item/reasoning/summaryPartAdded") {
-      this.#reasoningSectionBreak(threadId);
-      return;
-    }
-
-    // Terminal interaction (interactive command)
-    if (method === "item/commandExecution/terminalInteraction") {
-      const stdin = (params.stdin as string) || "";
-      const processId = (params.processId as string) || (params.process_id as string) || "";
-      const itemId = (params.itemId as string) || (params.item_id as string) || "";
-      const key = processId || itemId || `terminal-${threadId}`;
-      const command = itemId ? this.#execCommands.get(itemId) : null;
-      const waitingLine = command ? `(waiting for ${command})` : "(waiting for command output)";
-      const waitId = `terminal-wait-${key}`;
-      const messageId = `terminal-${key}`;
-      const trimmed = stdin.replace(/\r?\n$/, "");
-
-      if (!stdin) {
-        this.#upsert(threadId, {
-          id: waitId,
-          role: "tool",
-          kind: "wait",
-          text: waitingLine,
-          threadId,
-        });
-        return;
-      }
-
-      this.#remove(threadId, waitId);
-      if (trimmed) {
-        this.#appendToMessage(threadId, messageId, `${trimmed}\n`, "tool", "terminal");
-      }
-      return;
-    }
-
-    // Command execution output delta (streaming)
-    if (method === "item/commandExecution/outputDelta") {
-      const delta = (params.delta as string) || "";
-      const itemId = (params.itemId as string) || (params.item_id as string) || `cmd-${threadId}`;
-      this.#updateStreamingTool(threadId, itemId, delta, "command");
-      return;
-    }
-
-    // File change output delta (streaming)
-    if (method === "item/fileChange/outputDelta") {
-      const delta = (params.delta as string) || "";
-      const itemId = (params.itemId as string) || (params.item_id as string) || `file-${threadId}`;
-      this.#updateStreamingTool(threadId, itemId, delta, "file");
-      return;
-    }
-
-    // MCP tool call progress
-    if (method === "item/mcpToolCall/progress") {
-      const message = (params.message as string) || "";
-      const itemId = (params.itemId as string) || (params.item_id as string) || `mcp-${threadId}`;
-      this.#updateStreamingTool(threadId, itemId, message + "\n", "mcp");
-      return;
-    }
-
-    // Plan item delta (streaming)
-    if (method === "item/plan/delta") {
-      const delta = (params.delta as string) || "";
-      const itemId = (params.itemId as string) || (params.item_id as string) || `plan-${threadId}`;
-      this.#updateStreamingTool(threadId, itemId, delta, "plan");
-      return;
-    }
-
-    // Turn started
     if (method === "turn/started") {
-      const turn = params.turn as { id: string; status?: string } | undefined;
-      if (turn) {
-        this.#turnIdByThread = new Map(this.#turnIdByThread).set(threadId, turn.id);
-        this.#turnStatusByThread = new Map(this.#turnStatusByThread).set(threadId, (turn.status as TurnStatus) || "InProgress");
-        this.#interruptPendingByThread.delete(threadId);
-        this.#planByThread = new Map(this.#planByThread).set(threadId, []);
-        this.#planExplanationByThread = new Map(this.#planExplanationByThread).set(threadId, null);
-        this.#statusDetailByThread = new Map(this.#statusDetailByThread).set(threadId, null);
-        this.#resetReasoningState(threadId);
-      }
+      const turn = isRecord(params.turn) ? params.turn : null;
+      if (typeof turn?.id !== "string") return;
+      this.#setTranscript(threadId, startTurn(this.#ensureTranscript(threadId), turn.id, stringValue(turn.status)));
+      this.#interruptPending.delete(threadId);
+      this.#presentation = new Map(this.#presentation).set(threadId, emptyPresentation());
       return;
     }
 
-    // Turn completed
     if (method === "turn/completed") {
-      const turn = params.turn as { id: string; status?: string } | undefined;
-      if (turn) {
-        this.#turnStatusByThread = new Map(this.#turnStatusByThread).set(threadId, (turn.status as TurnStatus) || "Completed");
-        this.#interruptPendingByThread.delete(threadId);
-        this.#statusDetailByThread = new Map(this.#statusDetailByThread).set(threadId, null);
-
-        // Clear pending live messages for this thread — turn is done
-        for (const [id, msg] of this.#pendingLiveMessages) {
-          if (msg.threadId === threadId) this.#pendingLiveMessages.delete(id);
-        }
-
-        // Fire turn complete callback if registered
-        const callback = this.#turnCompleteCallbacks.get(threadId);
-        if (callback) {
-          const latestMessage = this.getLatestAssistantMessage(threadId);
-          callback(threadId, latestMessage?.text ?? "");
-          this.#turnCompleteCallbacks.delete(threadId);
-        }
+      const turn = isRecord(params.turn) ? params.turn : null;
+      this.#setTranscript(threadId, completeTurn(
+        this.#ensureTranscript(threadId),
+        typeof turn?.id === "string" ? turn.id : turnId,
+        stringValue(turn?.status),
+      ));
+      this.#interruptPending.delete(threadId);
+      this.#setView(threadId, { reasoningItemId: null, statusDetail: null });
+      const callback = this.#turnCompleteCallbacks.get(threadId);
+      if (callback) {
+        callback(threadId, this.getLatestAssistantMessage(threadId)?.text ?? "");
+        this.#turnCompleteCallbacks.delete(threadId);
       }
       return;
     }
 
-    // Turn plan updated
+    if (method === "item/started") {
+      const item = isRecord(params.item) ? params.item : null;
+      if (!item) return;
+      this.#setTranscript(threadId, startItem(this.#ensureTranscript(threadId), turnId, item));
+      if (item.type === "commandExecution" && typeof item.id === "string") {
+        this.#execCommands.set(item.id, stringValue(item.command));
+      }
+      return;
+    }
+
+    if (method === "item/completed") {
+      const item = isRecord(params.item) ? params.item : null;
+      if (!item) return;
+      this.#setTranscript(threadId, completeItem(this.#ensureTranscript(threadId), turnId, item));
+      if (typeof item.id === "string") this.#execCommands.delete(item.id);
+      if (item.type === "reasoning") this.#setView(threadId, { reasoningItemId: null });
+      return;
+    }
+
+    if (method === "item/agentMessage/delta") {
+      this.#appendDelta(threadId, turnId, params, "assistant");
+      return;
+    }
+    if (method === "item/commandExecution/outputDelta") {
+      this.#appendDelta(threadId, turnId, params, "tool", "command");
+      return;
+    }
+    if (method === "item/fileChange/outputDelta") {
+      this.#appendDelta(threadId, turnId, params, "tool", "file");
+      return;
+    }
+    if (method === "item/mcpToolCall/progress") {
+      this.#appendDelta(threadId, turnId, { ...params, delta: `${stringValue(params.message)}\n` }, "tool", "mcp");
+      return;
+    }
+    if (method === "item/plan/delta") {
+      this.#appendDelta(threadId, turnId, params, "tool", "plan");
+      return;
+    }
+    if (method === "item/reasoning/summaryTextDelta" || method === "item/reasoning/textDelta") {
+      const itemId = itemIdFromParams(params, `reasoning-${turnId ?? threadId}`);
+      this.#appendDelta(threadId, turnId, { ...params, itemId }, "assistant", "reasoning");
+      this.#setView(threadId, { reasoningItemId: itemId });
+      return;
+    }
+
+    if (method === "item/commandExecution/terminalInteraction") {
+      this.#handleTerminalInteraction(threadId, params);
+      return;
+    }
     if (method === "turn/plan/updated") {
-      const explanation = params.explanation as string | undefined;
-      const plan = params.plan as Array<{ step: string; status: string }> | undefined;
-
-      if (explanation) {
-        this.#planExplanationByThread = new Map(this.#planExplanationByThread).set(threadId, explanation);
-      }
-      if (plan) {
-        this.#planByThread = new Map(this.#planByThread).set(threadId, plan.map((p) => ({
-          step: p.step,
-          status: p.status as PlanStep["status"],
-        })));
-      }
-      return;
-    }
-
-    // User input requests (plan mode questions)
-    if (method === "item/tool/requestUserInput") {
-      const rpcId = msg.id as number | string;
-      const itemId = this.#stableRequestItemId("user-input", method, rpcId, params);
-      const questions = (params.questions as UserInputQuestion[]) || [];
-
-      // A pending request means a turn is actively waiting
-      this.#turnStatusByThread = new Map(this.#turnStatusByThread).set(threadId, "InProgress");
-
-      const userInputRequest: UserInputRequest = {
-        rpcId,
-        questions,
-        status: "pending",
-      };
-
-      const inputMsg: Message = {
-        id: `user-input-${itemId}`,
-        role: "assistant",
-        kind: "user-input-request",
-        text: questions.map((q) => q.question).join("\n"),
-        threadId,
-        userInputRequest,
-      };
-      this.#pendingLiveMessages.set(inputMsg.id, inputMsg);
-      const existing = this.#byThread.get(threadId);
-      if (!existing?.some((m) => m.id === inputMsg.id)) {
-        this.#add(threadId, inputMsg);
-      }
-      return;
-    }
-
-    // MCP server elicitation request (form input)
-    if (method === "mcpServer/elicitation/request") {
-      const rpcId = msg.id as number | string;
-      const itemId = `elicitation-${rpcId}`;
-      const serverName = (params.serverName as string) || "MCP Server";
-      const request = params.request as { message?: string } | undefined;
-      const description = request?.message || `${serverName} requires input`;
-
-      this.#turnStatusByThread = new Map(this.#turnStatusByThread).set(threadId, "InProgress");
-
-      const approval: ApprovalRequest = {
-        id: itemId,
-        rpcId,
-        method,
-        type: "elicitation",
-        description,
-        toolName: serverName,
-        status: "pending",
-      };
-
-      this.#pendingApprovals.set(itemId, approval);
-      this.#pendingApprovals = new Map(this.#pendingApprovals);
-
-      const approvalMsg: Message = {
-        id: `approval-${itemId}`,
-        role: "approval",
-        kind: "approval-request",
-        text: description,
-        threadId,
-        approval,
-      };
-      this.#pendingLiveMessages.set(approvalMsg.id, approvalMsg);
-      const existing = this.#byThread.get(threadId);
-      if (!existing?.some((m) => m.id === approvalMsg.id)) {
-        this.#add(threadId, approvalMsg);
-      }
-      return;
-    }
-
-    // Approval requests (file changes, commands, etc.)
-    if (method?.includes("/requestApproval") || method === "applyPatchApproval" || method === "execCommandApproval") {
-      const rpcId = msg.id as number | string | undefined;
-      const itemId = this.#stableRequestItemId("approval", method, rpcId, params);
-      const reason = (params.reason as string) || null;
-
-      // A pending approval means a turn is actively waiting
-      this.#turnStatusByThread = new Map(this.#turnStatusByThread).set(threadId, "InProgress");
-
-      // Determine type from method name
-      let approvalType: ApprovalRequest["type"] = "other";
-      let description = "";
-
-      if (method === "item/fileChange/requestApproval" || method === "applyPatchApproval") {
-        approvalType = "file";
-        description = reason || "File change requires approval";
-      } else if (method === "item/commandExecution/requestApproval" || method === "execCommandApproval") {
-        approvalType = "command";
-        description = reason || "Command execution requires approval";
-      } else if (method === "item/permissions/requestApproval") {
-        approvalType = "permissions";
-        description = reason || "Additional permissions required";
-      } else if (method === "item/mcpToolCall/requestApproval") {
-        approvalType = "mcp";
-        description = reason || "MCP tool call requires approval";
-      } else {
-        description = reason || "Action requires approval";
-      }
-
-      // Extract richer params from command approval
-      const rawCommand = params.command;
-      const command = Array.isArray(rawCommand)
-        ? rawCommand.map(String).join(" ")
-        : (rawCommand as string) || undefined;
-      const cwd = (params.cwd as string) || undefined;
-      const grantRoot = (params.grantRoot as string) || undefined;
-      const requestedPermissions =
-        params.permissions && typeof params.permissions === "object" && !Array.isArray(params.permissions)
-          ? (params.permissions as Record<string, unknown>)
-          : undefined;
-
-      const approval: ApprovalRequest = {
-        id: itemId,
-        rpcId: rpcId ?? itemId, // Store the RPC ID so we can respond to it
-        method,
-        type: approvalType,
-        description,
-        command,
-        cwd,
-        grantRoot,
-        requestedPermissions,
-        status: "pending",
-      };
-
-      this.#pendingApprovals.set(itemId, approval);
-      this.#pendingApprovals = new Map(this.#pendingApprovals);
-
-      const approvalMsg: Message = {
-        id: `approval-${itemId}`,
-        role: "approval",
-        kind: "approval-request",
-        text: description,
-        threadId,
-        approval,
-      };
-      this.#pendingLiveMessages.set(approvalMsg.id, approvalMsg);
-      const existing = this.#byThread.get(threadId);
-      if (!existing?.some((m) => m.id === approvalMsg.id)) {
-        this.#add(threadId, approvalMsg);
-      }
-      return;
-    }
-
-    // Error notification
-    if (method === "error") {
-      const message = (params.message as string) || (params.error as string) || "Unknown error";
-      this.#add(threadId, {
-        id: `error-${threadId}-${Date.now()}`,
-        role: "tool",
-        kind: "error",
-        text: message,
-        threadId,
+      const plan = Array.isArray(params.plan)
+        ? params.plan.filter(isRecord).map((step) => ({
+          step: stringValue(step.step),
+          status: stringValue(step.status) as PlanStep["status"],
+        }))
+        : this.#view(threadId).plan;
+      this.#setView(threadId, {
+        plan,
+        planExplanation: typeof params.explanation === "string"
+          ? params.explanation
+          : this.#view(threadId).planExplanation,
       });
       return;
     }
-
-    // Model rerouted notification
-    if (method === "model/rerouted") {
-      const from = (params.fromModel as string) || "";
-      const to = (params.toModel as string) || "";
-      const reason = (params.reason as string) || "";
-      const text = `Model changed from ${from} to ${to}${reason ? `: ${reason}` : ""}`;
-      this.#add(threadId, {
-        id: `reroute-${threadId}-${Date.now()}`,
-        role: "tool",
-        kind: "warning",
-        text,
-        threadId,
-      });
+    if (method === "item/tool/requestUserInput" && message.id != null) {
+      this.#addUserInputRequest(threadId, turnId, message.id, params);
       return;
     }
-
-    // Deprecation notice
-    if (method === "deprecationNotice") {
-      const summary = (params.summary as string) || "";
-      const details = (params.details as string) || "";
-      this.#add(threadId, {
-        id: `deprecation-${threadId}-${Date.now()}`,
-        role: "tool",
-        kind: "warning",
-        text: details ? `${summary}\n${details}` : summary,
-        threadId,
-      });
+    if (method === "mcpServer/elicitation/request" && message.id != null) {
+      this.#addApproval(threadId, turnId, message.id, method, params, "elicitation");
       return;
     }
-
-    // Config warning
-    if (method === "configWarning") {
-      const message = (params.message as string) || (params.summary as string) || "Configuration warning";
-      this.#add(threadId, {
-        id: `config-warn-${threadId}-${Date.now()}`,
-        role: "tool",
-        kind: "warning",
-        text: message,
-        threadId,
-      });
+    if (isApprovalMethod(method) && message.id != null) {
+      this.#addApproval(threadId, turnId, message.id, method, params, approvalType(method));
       return;
     }
+    if (method === "serverRequest/resolved" && params.requestId != null) {
+      this.#resolveRequestByRpcId(threadId, params.requestId as string | number);
+      return;
+    }
+    if (method === "error" || method === "deprecationNotice" || method === "configWarning" || method === "model/rerouted") {
+      this.#addNotice(threadId, turnId, method, params);
+      return;
+    }
+    if (method === "turn/diff/updated" && typeof params.diff === "string") {
+      this.#upsert(threadId, {
+        id: `diff-${threadId}-${turnId ?? "current"}`,
+        role: "tool",
+        kind: "diff",
+        text: params.diff,
+        threadId,
+      }, turnId);
+    }
+  }
 
-    // Turn diff updated
-    if (method === "turn/diff/updated") {
-      const diff = (params.diff as string) || "";
-      if (diff) {
-        const turnId = (params.turnId as string) || "";
+  #handleHostRequest(message: RpcMessage): boolean {
+    if (message.method === "currentTime/read") {
+      if (message.id != null) {
+        socket.send({ id: message.id, result: { currentTimeAt: Math.floor(Date.now() / 1_000) } });
+      }
+      return true;
+    }
+
+    if (message.method === "account/chatgptAuthTokens/refresh" || message.method === "attestation/generate") {
+      if (message.id != null) {
+        socket.send({
+          id: message.id,
+          error: { code: -32000, message: `Zane cannot handle ${message.method} yet.` },
+        });
+      }
+      return true;
+    }
+
+    if (message.method === "item/tool/call") {
+      const params = isRecord(message.params) ? message.params : {};
+      const threadId = extractThreadId(params);
+      const description = `${stringValue(params.namespace) ? `${stringValue(params.namespace)}.` : ""}${stringValue(params.tool) || "dynamic tool"} is not available in Zane yet.`;
+      if (threadId) {
         this.#upsert(threadId, {
-          id: `diff-${threadId}-${turnId}`,
+          id: `dynamic-tool-${stringValue(params.callId) || String(message.id ?? Date.now())}`,
           role: "tool",
-          kind: "diff",
-          text: diff,
+          kind: "mcp",
+          text: description,
           threadId,
         });
       }
-      return;
-    }
-
-    // Server request resolved (clear the corresponding pending approval)
-    if (method === "serverRequest/resolved") {
-      const requestId = params.requestId as number | string | undefined;
-      if (requestId != null) {
-        let changed = false;
-        for (const [id, approval] of this.#pendingApprovals) {
-          if (String(approval.rpcId) === String(requestId) && approval.status === "pending") {
-            approval.status = "approved";
-            this.#pendingLiveMessages.delete(`approval-${id}`);
-            this.#updateApprovalInMessages(id, "approved");
-            changed = true;
-          }
-        }
-        if (changed) {
-          this.#pendingApprovals = new Map(this.#pendingApprovals);
-        }
+      if (message.id != null) {
+        socket.send({ id: message.id, result: { success: false, contentItems: [{ type: "inputText", text: description }] } });
       }
-      return;
+      return true;
     }
-
-    // Item completed (tool outputs, file changes, commands)
-    if (method === "item/completed") {
-      const item = params.item as Record<string, unknown>;
-      if (!item) return;
-
-      const itemId = (item.id as string) || `item-${Date.now()}`;
-      const type = item.type as string;
-
-      switch (type) {
-        case "agentMessage": {
-          const text = ((item.text as string) || "").replace(/<proposed_plan>[\s\S]*?<\/proposed_plan>/g, "").trim();
-          if (!text) return;
-          const pendingId = this.#pendingAgentMessageIds.get(threadId);
-          if (pendingId && pendingId !== itemId) {
-            this.#remove(threadId, pendingId);
-            this.#clearStreaming(threadId, pendingId);
-          }
-          this.#pendingAgentMessageIds.delete(threadId);
-          this.#upsert(threadId, { id: itemId, role: "assistant", text, threadId });
-          this.#clearStreaming(threadId, itemId);
-          return;
-        }
-        case "reasoning":
-          this.#finaliseReasoning(threadId, item);
-          return;
-        case "commandExecution": {
-          const command = (item.command as string) || "";
-          const output = (item.aggregatedOutput as string) || "";
-          const text = command ? `$ ${command}\n${output}` : output;
-          const exitCode = typeof item.exitCode === "number" ? item.exitCode : null;
-          this.#upsert(threadId, {
-            id: itemId,
-            role: "tool",
-            kind: "command",
-            text,
-            threadId,
-            metadata: exitCode !== null ? { exitCode } : undefined,
-          });
-          this.#clearStreaming(threadId, itemId);
-          this.#execCommands.delete(itemId);
-          return;
-        }
-        case "fileChange": {
-          const changes = item.changes as Array<{ path: string; diff?: string }>;
-          const text = changes?.map((c) => `${c.path}\n${c.diff || ""}`).join("\n\n") || "";
-          this.#upsert(threadId, { id: itemId, role: "tool", kind: "file", text, threadId });
-          this.#clearStreaming(threadId, itemId);
-          return;
-        }
-        case "mcpToolCall": {
-          const result = item.error ?? item.result ?? "";
-          const text = `Tool: ${item.tool}\n${result ? JSON.stringify(result, null, 2) : ""}`;
-          this.#upsert(threadId, { id: itemId, role: "tool", kind: "mcp", text, threadId });
-          this.#clearStreaming(threadId, itemId);
-          return;
-        }
-        case "webSearch": {
-          const text = `Search: ${item.query}`;
-          this.#upsert(threadId, { id: itemId, role: "tool", kind: "web", text, threadId });
-          return;
-        }
-        case "imageView": {
-          const text = `Image: ${item.path ?? ""}`;
-          this.#upsert(threadId, { id: itemId, role: "tool", kind: "image", text, threadId });
-          return;
-        }
-        case "enteredReviewMode": {
-          const review = (item.review as string) || "";
-          const text = review ? `Review started: ${review}` : "Review started.";
-          this.#upsert(threadId, { id: itemId, role: "tool", kind: "review", text, threadId });
-          return;
-        }
-        case "exitedReviewMode": {
-          const review = (item.review as string) || "";
-          const text = review || "Review complete.";
-          this.#upsert(threadId, { id: itemId, role: "tool", kind: "review", text, threadId });
-          return;
-        }
-        case "plan": {
-          const text = ((item.text as string) || "").replace(/<\/?proposed_plan>/g, "").trim();
-          this.#upsert(threadId, { id: itemId, role: "tool", kind: "plan", text, threadId });
-          this.#clearStreaming(threadId, itemId);
-          return;
-        }
-        case "collabAgentToolCall": {
-          const tool = (item.tool as string) || "spawnAgent";
-          const receivers = (item.receiverThreadIds as string[]) || [];
-          const prompt = (item.prompt as string) || "";
-          const status = (item.status as string) || "completed";
-          const lines = [`${tool}: ${receivers.join(", ") || "—"}`];
-          if (prompt) lines.push(prompt);
-          lines.push(`Status: ${status}`);
-          this.#upsert(threadId, { id: itemId, role: "tool", kind: "collab", text: lines.join("\n"), threadId });
-          return;
-        }
-        case "contextCompaction": {
-          this.#upsert(threadId, { id: itemId, role: "tool", kind: "compaction", text: "Context compacted", threadId });
-          return;
-        }
-        default:
-          return;
-      }
-    }
+    return false;
   }
 
-  #extractThreadId(params: Record<string, unknown>): string | null {
-    return (
-      (params.threadId as string) ||
-      (params.thread_id as string) ||
-      (params.conversationId as string) ||
-      (params.conversation_id as string) ||
-      null
-    );
-  }
-
-  #loadThread(
+  #appendDelta(
     threadId: string,
-    turns: Array<{ items?: unknown[]; status?: string; id?: string }>,
-    _options: { authoritative?: boolean } = {},
-  ) {
-    const messages: Message[] = [];
-
-    for (const turn of turns) {
-      if (!turn.items) continue;
-
-      for (const item of turn.items as Array<Record<string, unknown>>) {
-        const id = (item.id as string) || `item-${Date.now()}-${Math.random()}`;
-        const type = item.type as string;
-
-        switch (type) {
-          case "userMessage": {
-            const content = item.content as Array<{ type: string; text?: string }>;
-            const text = content?.find((c) => c.type === "text")?.text || "";
-            messages.push({ id, role: "user", text, threadId });
-            break;
-          }
-
-          case "agentMessage": {
-            const agentText = ((item.text as string) || "").replace(/<proposed_plan>[\s\S]*?<\/proposed_plan>/g, "").trim();
-            if (agentText) {
-              messages.push({
-                id,
-                role: "assistant",
-                text: agentText,
-                threadId,
-              });
-            }
-            break;
-          }
-
-          case "reasoning": {
-            const text = this.#extractReasoningSummary(this.#reasoningTextFromItem(item));
-            if (text) messages.push({ id, role: "assistant", kind: "reasoning", text, threadId });
-            break;
-          }
-
-          case "commandExecution": {
-            const command = (item.command as string) || "";
-            const output = (item.aggregatedOutput as string) || "";
-            const exitCode = typeof item.exitCode === "number" ? item.exitCode : null;
-            messages.push({
-              id,
-              role: "tool",
-              kind: "command",
-              text: command ? `$ ${command}\n${output}` : output,
-              threadId,
-              metadata: exitCode !== null ? { exitCode } : undefined,
-            });
-            break;
-          }
-
-          case "fileChange": {
-            const changes = item.changes as Array<{ path: string; diff?: string }>;
-            messages.push({
-              id,
-              role: "tool",
-              kind: "file",
-              text: changes?.map((c) => `${c.path}\n${c.diff || ""}`).join("\n\n") || "",
-              threadId,
-            });
-            break;
-          }
-
-          case "mcpToolCall":
-            messages.push({
-              id,
-              role: "tool",
-              kind: "mcp",
-              text: `Tool: ${item.tool}\n${JSON.stringify(item.error ?? item.result ?? "", null, 2)}`,
-              threadId,
-            });
-            break;
-
-          case "webSearch":
-            messages.push({
-              id,
-              role: "tool",
-              kind: "web",
-              text: `Search: ${item.query}`,
-              threadId,
-            });
-            break;
-
-          case "imageView":
-            messages.push({
-              id,
-              role: "tool",
-              kind: "image",
-              text: `Image: ${item.path ?? ""}`,
-              threadId,
-            });
-            break;
-
-          case "enteredReviewMode": {
-            const review = (item.review as string) || "";
-            messages.push({
-              id,
-              role: "tool",
-              kind: "review",
-              text: review ? `Review started: ${review}` : "Review started.",
-              threadId,
-            });
-            break;
-          }
-
-          case "exitedReviewMode": {
-            const review = (item.review as string) || "";
-            messages.push({
-              id,
-              role: "tool",
-              kind: "review",
-              text: review || "Review complete.",
-              threadId,
-            });
-            break;
-          }
-
-          case "plan": {
-            const text = ((item.text as string) || "").replace(/<\/?proposed_plan>/g, "").trim();
-            if (text) messages.push({ id, role: "tool", kind: "plan", text, threadId });
-            break;
-          }
-
-          case "collabAgentToolCall": {
-            const tool = (item.tool as string) || "spawnAgent";
-            const receivers = (item.receiverThreadIds as string[]) || [];
-            const prompt = (item.prompt as string) || "";
-            const status = (item.status as string) || "completed";
-            const lines = [`${tool}: ${receivers.join(", ") || "—"}`];
-            if (prompt) lines.push(prompt);
-            lines.push(`Status: ${status}`);
-            messages.push({ id, role: "tool", kind: "collab", text: lines.join("\n"), threadId });
-            break;
-          }
-
-          case "contextCompaction":
-            messages.push({ id, role: "tool", kind: "compaction", text: "Context compacted", threadId });
-            break;
-        }
-      }
-    }
-
-    // Mark plans as approved if a user message follows them
-    for (let i = 0; i < messages.length; i++) {
-      if (messages[i].kind !== "plan") continue;
-      const hasFollowUp = messages.slice(i + 1).some(
-        (m) => m.role === "user" || (m.role === "assistant" && m.kind !== "reasoning"),
-      );
-      if (hasFollowUp) {
-        messages[i] = { ...messages[i], planStatus: "approved" };
-      }
-    }
-
-    this.#byThread.set(threadId, this.#mergeThreadSnapshot(threadId, messages));
-    this.#byThread = new Map(this.#byThread);
+    turnId: string | null,
+    params: Record<string, unknown>,
+    role: "assistant" | "tool",
+    kind?: MessageKind,
+  ): void {
+    const itemId = itemIdFromParams(params, `${kind ?? role}-${turnId ?? threadId}`);
+    this.#setTranscript(threadId, appendItemDelta(this.#ensureTranscript(threadId), {
+      itemId,
+      turnId,
+      delta: stringValue(params.delta),
+      role,
+      kind,
+    }));
   }
+
+  #handleTerminalInteraction(threadId: string, params: Record<string, unknown>): void {
+    const itemId = itemIdFromParams(params, `terminal-${threadId}`);
+    const stdin = stringValue(params.stdin).replace(/\r?\n$/, "");
+    const waitId = `terminal-wait-${itemId}`;
+    if (!stdin) {
+      const command = this.#execCommands.get(itemId);
+      this.#upsert(threadId, {
+        id: waitId,
+        role: "tool",
+        kind: "wait",
+        text: command ? `(waiting for ${command})` : "(waiting for command output)",
+        threadId,
+      });
+      return;
+    }
+    this.#setTranscript(threadId, removeTranscriptMessage(this.#ensureTranscript(threadId), waitId));
+    this.#setTranscript(threadId, appendItemDelta(this.#ensureTranscript(threadId), {
+      itemId: `terminal-${itemId}`,
+      turnId: extractTurnId(params),
+      delta: `${stdin}\n`,
+      role: "tool",
+      kind: "terminal",
+    }));
+  }
+
+  #addUserInputRequest(
+    threadId: string,
+    turnId: string | null,
+    rpcId: string | number,
+    params: Record<string, unknown>,
+  ): void {
+    const questions = Array.isArray(params.questions) ? params.questions as UserInputQuestion[] : [];
+    const request: UserInputRequest = { rpcId, questions, status: "pending" };
+    const id = `user-input-${stableRequestId("input", rpcId, params)}`;
+    this.#upsert(threadId, {
+      id,
+      role: "assistant",
+      kind: "user-input-request",
+      text: questions.map((question) => question.question).join("\n"),
+      threadId,
+      userInputRequest: request,
+    }, turnId);
+  }
+
+  #addApproval(
+    threadId: string,
+    turnId: string | null,
+    rpcId: string | number,
+    method: string,
+    params: Record<string, unknown>,
+    type: ApprovalRequest["type"],
+  ): void {
+    const id = stableRequestId("approval", rpcId, params);
+    const request = isRecord(params.request) ? params.request : null;
+    const rawCommand = params.command;
+    const approval: ApprovalRequest = {
+      id,
+      rpcId,
+      method,
+      type,
+      description: stringValue(params.reason) || stringValue(request?.message) || approvalDescription(type),
+      command: Array.isArray(rawCommand) ? rawCommand.map(String).join(" ") : stringValue(rawCommand) || undefined,
+      cwd: stringValue(params.cwd) || undefined,
+      grantRoot: stringValue(params.grantRoot) || undefined,
+      toolName: stringValue(params.serverName) || undefined,
+      requestedPermissions: isRecord(params.permissions) ? params.permissions : undefined,
+      status: "pending",
+    };
+    this.#upsert(threadId, {
+      id: `approval-${id}`,
+      role: "approval",
+      kind: "approval-request",
+      text: approval.description,
+      threadId,
+      approval,
+    }, turnId);
+  }
+
+  #addNotice(
+    threadId: string,
+    turnId: string | null,
+    method: string,
+    params: Record<string, unknown>,
+  ): void {
+    let text = stringValue(params.message) || stringValue(params.summary) || stringValue(params.error);
+    if (method === "deprecationNotice" && stringValue(params.details)) {
+      text = `${text}\n${stringValue(params.details)}`;
+    }
+    if (method === "model/rerouted") {
+      text = `Model changed from ${stringValue(params.fromModel)} to ${stringValue(params.toModel)}${stringValue(params.reason) ? `: ${stringValue(params.reason)}` : ""}`;
+    }
+    this.#upsert(threadId, {
+      id: `${method}-${threadId}-${Date.now()}`,
+      role: "tool",
+      kind: method === "error" ? "error" : "warning",
+      text: text || "Unknown error",
+      threadId,
+    }, turnId);
+  }
+
+  #resolveRequestByRpcId(threadId: string, rpcId: string | number): void {
+    const transcript = this.#ensureTranscript(threadId);
+    const message = transcript.messages.find((candidate) =>
+      String(candidate.approval?.rpcId ?? candidate.userInputRequest?.rpcId ?? "") === String(rpcId));
+    if (message) this.#resolveRequest(threadId, message.id);
+  }
+
+  #resolveRequest(threadId: string, messageId: string): void {
+    this.#setTranscript(threadId, removeTranscriptMessage(this.#ensureTranscript(threadId), messageId));
+  }
+
+  #findApproval(approvalId: string): {
+    threadId: string;
+    messageId: string;
+    approval: ApprovalRequest;
+  } | null {
+    for (const [threadId, transcript] of this.#transcripts) {
+      const message = transcript.messages.find((candidate) => candidate.approval?.id === approvalId);
+      if (message?.approval) return { threadId, messageId: message.id, approval: message.approval };
+    }
+    return null;
+  }
+
+  #upsert(threadId: string, message: Message, turnId?: string | null): void {
+    this.#setTranscript(threadId, upsertTranscriptMessage(this.#ensureTranscript(threadId), message, turnId));
+  }
+
+  #transcript(threadId: string | null): ThreadTranscript | null {
+    return threadId ? this.#transcripts.get(threadId) ?? null : null;
+  }
+
+  #ensureTranscript(threadId: string): ThreadTranscript {
+    return this.#transcripts.get(threadId) ?? createThreadTranscript(threadId);
+  }
+
+  #setTranscript(threadId: string, transcript: ThreadTranscript): void {
+    this.#transcripts = new Map(this.#transcripts).set(threadId, transcript);
+  }
+
+  #view(threadId: string | null): ThreadPresentation {
+    return threadId ? this.#presentation.get(threadId) ?? emptyPresentation() : emptyPresentation();
+  }
+
+  #setView(threadId: string, update: Partial<ThreadPresentation>): void {
+    this.#presentation = new Map(this.#presentation).set(threadId, { ...this.#view(threadId), ...update });
+  }
+}
+
+function emptyPresentation(): ThreadPresentation {
+  return { plan: [], planExplanation: null, statusDetail: null, reasoningItemId: null };
+}
+
+function extractThreadId(params: Record<string, unknown>): string | null {
+  return firstString(params.threadId, params.thread_id, params.conversationId, params.conversation_id);
+}
+
+function extractTurnId(params: Record<string, unknown>): string | null {
+  const turn = isRecord(params.turn) ? params.turn : null;
+  return firstString(params.turnId, params.turn_id, turn?.id);
+}
+
+function itemIdFromParams(params: Record<string, unknown>, fallback: string): string {
+  return firstString(params.itemId, params.item_id) ?? fallback;
+}
+
+function stableRequestId(prefix: string, rpcId: string | number, params: Record<string, unknown>): string {
+  return firstString(params.approvalId, params.itemId, params.item_id, params.callId, params.call_id)
+    ?? `${prefix}-${String(rpcId)}`;
+}
+
+function isApprovalMethod(method: string): boolean {
+  return method.includes("/requestApproval") || method === "applyPatchApproval" || method === "execCommandApproval";
+}
+
+function approvalType(method: string): ApprovalRequest["type"] {
+  if (method.includes("fileChange") || method === "applyPatchApproval") return "file";
+  if (method.includes("commandExecution") || method === "execCommandApproval") return "command";
+  if (method.includes("permissions")) return "permissions";
+  if (method.includes("mcpToolCall")) return "mcp";
+  return "other";
+}
+
+function approvalDescription(type: ApprovalRequest["type"]): string {
+  switch (type) {
+    case "file": return "File change requires approval";
+    case "command": return "Command execution requires approval";
+    case "permissions": return "Additional permissions required";
+    case "mcp": return "MCP tool call requires approval";
+    case "elicitation": return "MCP server requires input";
+    default: return "Action requires approval";
+  }
+}
+
+function approvalAcceptResult(approval: ApprovalRequest, forSession: boolean): Record<string, unknown> {
+  if (approval.method === "item/permissions/requestApproval") {
+    return {
+      permissions: grantedPermissions(approval.requestedPermissions),
+      scope: forSession ? "session" : "turn",
+    };
+  }
+  if (approval.method === "mcpServer/elicitation/request") {
+    return { action: "accept", content: {}, _meta: null };
+  }
+  if (approval.method === "applyPatchApproval" || approval.method === "execCommandApproval") {
+    return { decision: forSession ? "approved_for_session" : "approved" };
+  }
+  return { decision: forSession ? "acceptForSession" : "accept" };
+}
+
+function approvalRejectResult(
+  approval: ApprovalRequest,
+  action: "decline" | "cancel",
+): Record<string, unknown> {
+  if (approval.method === "item/permissions/requestApproval") {
+    return { permissions: {}, scope: "turn" };
+  }
+  if (approval.method === "mcpServer/elicitation/request") {
+    return { action, content: null, _meta: null };
+  }
+  if (approval.method === "applyPatchApproval" || approval.method === "execCommandApproval") {
+    return { decision: action === "cancel" ? "abort" : "denied" };
+  }
+  return { decision: action };
+}
+
+function grantedPermissions(requested: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!requested) return {};
+  const granted: Record<string, unknown> = {};
+  if (isRecord(requested.network)) granted.network = requested.network;
+  const fileSystem = requested.fileSystem ?? requested.file_system;
+  if (isRecord(fileSystem)) granted.fileSystem = fileSystem;
+  return granted;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value) return value;
+    if (typeof value === "number") return String(value);
+  }
+  return null;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function getStore(): MessagesStore {
@@ -1334,7 +701,7 @@ function getStore(): MessagesStore {
   if (!global[STORE_KEY]) {
     const store = new MessagesStore();
     global[STORE_KEY] = store;
-    socket.onMessage((msg) => store.handleMessage(msg));
+    socket.onMessage((message) => store.handleMessage(message));
   }
   return global[STORE_KEY] as MessagesStore;
 }

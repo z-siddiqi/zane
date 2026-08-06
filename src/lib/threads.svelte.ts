@@ -1,7 +1,6 @@
 import type { ApprovalPolicy, CollaborationMode, CollaborationModeMask, ModeKind, ReasoningEffort, SandboxMode, ThreadInfo, RpcMessage, ThreadSettings, TokenUsage, ThreadStatus as ThreadStatusType } from "./types";
 import { codexTextInput } from "./codex-input";
 import { socket } from "./socket.svelte";
-import { messages } from "./messages.svelte";
 import { models } from "./models.svelte";
 import { navigate } from "../router";
 
@@ -25,8 +24,10 @@ class ThreadsStore {
   #settings = $state<Map<string, ThreadSettings>>(new Map());
   #nextId = 1;
   #pendingRequests = new Map<number, string>();
-  #pendingThreadRequests = new Map<number, { type: string; threadId: string }>();
+  #pendingResumeRequests = new Map<number, { threadId: string; attempt: number }>();
+  #resumeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   #pendingStartInput: string | null = null;
+  #pendingStartThreadId: string | null = null;
   #pendingStartModel: string | null = null;
   #pendingCollaborationMode: CollaborationMode | null = null;
   #pendingStartCallback: ((threadId: string) => void) | null = null;
@@ -46,7 +47,10 @@ class ThreadsStore {
 
   constructor() {
     this.#loadSettings();
-    socket.onConnect(() => this.#reattachResumedThreads());
+    socket.onConnect(() => {
+      this.#reattachResumedThreads();
+      this.#sendPendingStartTurn();
+    });
   }
 
   getSettings(threadId: string | null): ThreadSettings {
@@ -89,7 +93,7 @@ class ThreadsStore {
     }
     this.currentId = threadId;
     socket.subscribeThread(threadId);
-    this.#resumeThread(threadId, true);
+    this.#resumeThread(threadId);
   }
 
   start(
@@ -206,8 +210,7 @@ class ThreadsStore {
     if (msg.method === "thread/started") {
       const params = msg.params as { thread: ThreadInfo };
       if (params?.thread) {
-        socket.subscribeThread(params.thread.id);
-        this.#handleNewThread(params.thread);
+        this.#upsertThread(params.thread);
       }
       return;
     }
@@ -269,24 +272,14 @@ class ThreadsStore {
       if (type === "list" && msg.result) {
         const result = msg.result as { data: ThreadInfo[] };
         this.list = result.data || [];
-        this.loading = false;
       }
+
+      if (type === "list") this.loading = false;
 
       if (type === "fork" && msg.result) {
         const result = msg.result as { thread?: ThreadInfo };
         if (result.thread) {
-          this.#handleNewThread(result.thread);
-        }
-      }
-
-      if (type === "resume") {
-        this.loading = false;
-      }
-
-      if (type === "read" && msg.result) {
-        const result = msg.result as { thread?: { id: string; turns?: Array<{ items?: unknown[] }> } };
-        if (result.thread?.id && result.thread.turns) {
-          messages.hydrateThread(result.thread.id, result.thread.turns, { authoritative: true });
+          this.#openCreatedThread(result.thread, false);
         }
       }
 
@@ -298,7 +291,7 @@ class ThreadsStore {
       if (type === "rollback" && msg.result) {
         const result = msg.result as { thread?: { id: string; turns?: Array<{ items?: unknown[] }> } };
         if (result.thread?.id) {
-          messages.clearThread(result.thread.id);
+          this.#resumeThread(result.thread.id);
         }
       }
 
@@ -322,11 +315,7 @@ class ThreadsStore {
             ...(sandbox ? { sandbox } : {}),
           });
 
-          // Handle thread creation if thread/started notification hasn't arrived
-          if (!this.list.some((t) => t.id === thread.id)) {
-            socket.subscribeThread(thread.id);
-            this.#handleNewThread(thread);
-          }
+          this.#openCreatedThread(thread, true);
         }
       }
 
@@ -335,49 +324,52 @@ class ThreadsStore {
       }
     }
 
-    if (msg.id != null && this.#pendingThreadRequests.has(msg.id as number)) {
-      const request = this.#pendingThreadRequests.get(msg.id as number)!;
-      this.#pendingThreadRequests.delete(msg.id as number);
-      if (request.type === "resume") {
+    if (msg.id != null && this.#pendingResumeRequests.has(msg.id as number)) {
+      const request = this.#pendingResumeRequests.get(msg.id as number)!;
+      this.#pendingResumeRequests.delete(msg.id as number);
+      if (msg.error && request.attempt < 5 && this.#isTransientResumeError(msg.error)) {
+        this.#scheduleResumeRetry(request.threadId, request.attempt + 1);
+      } else if (this.currentId === request.threadId) {
         this.loading = false;
-        if (!msg.error && this.currentId === request.threadId) {
-          this.#readThreadHistory(request.threadId);
-        }
-      }
-      if (request.type === "read" && msg.result) {
-        const result = msg.result as { thread?: { id: string; turns?: Array<{ items?: unknown[] }> } };
-        if (result.thread?.id && result.thread.turns) {
-          messages.hydrateThread(result.thread.id, result.thread.turns, { authoritative: true });
-        }
       }
     }
   }
 
-  #resumeThread(threadId: string, readHistory: boolean) {
+  #resumeThread(threadId: string, attempt = 0) {
+    const retryTimer = this.#resumeRetryTimers.get(threadId);
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      this.#resumeRetryTimers.delete(threadId);
+    }
     const id = this.#nextId++;
-    this.#pendingThreadRequests.set(id, { type: "resume", threadId });
+    this.#pendingResumeRequests.set(id, { threadId, attempt });
     const result = socket.send({
       method: "thread/resume",
       id,
       params: { threadId },
     });
     if (!result.success) {
-      this.#pendingThreadRequests.delete(id);
-      if (readHistory) this.#readThreadHistory(threadId);
+      this.#pendingResumeRequests.delete(id);
+      if (this.currentId === threadId) this.loading = false;
     }
   }
 
-  #readThreadHistory(threadId: string) {
-    const id = this.#nextId++;
-    this.#pendingThreadRequests.set(id, { type: "read", threadId });
-    const result = socket.send({
-      method: "thread/read",
-      id,
-      params: { threadId, includeTurns: true },
-    });
-    if (!result.success) {
-      this.#pendingThreadRequests.delete(id);
-    }
+  #scheduleResumeRetry(threadId: string, attempt: number) {
+    const delays = [50, 100, 250, 500, 1_000];
+    const timer = setTimeout(() => {
+      this.#resumeRetryTimers.delete(threadId);
+      this.#resumeThread(threadId, attempt);
+    }, delays[Math.min(attempt - 1, delays.length - 1)]);
+    this.#resumeRetryTimers.set(threadId, timer);
+  }
+
+  #isTransientResumeError(error: unknown): boolean {
+    const message = this.#getErrorMessage(error).toLowerCase();
+    return message.includes("rollout") && (
+      message.includes("empty") ||
+      message.includes("failed to read") ||
+      message.includes("session metadata")
+    );
   }
 
   #reattachResumedThreads() {
@@ -387,39 +379,58 @@ class ThreadsStore {
     }
 
     for (const threadId of threadIds) {
-      socket.subscribeThread(threadId);
-      this.#resumeThread(threadId, threadId === this.currentId);
+      this.#resumeThread(threadId);
     }
   }
 
-  #handleNewThread(thread: ThreadInfo) {
-    if (this.list.some((t) => t.id === thread.id)) return;
-    this.list = [thread, ...this.list];
+  #upsertThread(thread: ThreadInfo) {
+    const index = this.list.findIndex((candidate) => candidate.id === thread.id);
+    if (index < 0) {
+      this.list = [thread, ...this.list];
+      return;
+    }
+    const list = [...this.list];
+    list[index] = { ...list[index], ...thread };
+    this.list = list;
+  }
+
+  #openCreatedThread(thread: ThreadInfo, consumePendingStart: boolean) {
+    this.#upsertThread(thread);
     this.currentId = thread.id;
-    if (this.#pendingStartCallback) {
+    socket.subscribeThread(thread.id);
+    if (consumePendingStart && this.#pendingStartCallback) {
       this.#pendingStartCallback(thread.id);
       this.#pendingStartCallback = null;
     }
-    this.#pendingStartErrorCallback = null;
-    if (!this.#suppressNextNavigation) {
+    if (consumePendingStart) this.#pendingStartErrorCallback = null;
+    if (!consumePendingStart || !this.#suppressNextNavigation) {
       navigate("/thread/:id", { params: { id: thread.id } });
     }
-    if (this.#pendingStartInput) {
-      socket.send({
-        method: "turn/start",
-        id: this.#nextId++,
-        params: {
-          threadId: thread.id,
-          input: [codexTextInput(this.#pendingStartInput)],
-          ...(this.#pendingCollaborationMode
-            ? { collaborationMode: this.#pendingCollaborationMode }
-            : {}),
-        },
-      });
+    if (consumePendingStart) {
+      this.#pendingStartThreadId = this.#pendingStartInput ? thread.id : null;
+      this.#sendPendingStartTurn();
+      this.#suppressNextNavigation = false;
+    }
+  }
+
+  #sendPendingStartTurn() {
+    if (!this.#pendingStartThreadId || !this.#pendingStartInput) return;
+    const result = socket.send({
+      method: "turn/start",
+      id: this.#nextId++,
+      params: {
+        threadId: this.#pendingStartThreadId,
+        input: [codexTextInput(this.#pendingStartInput)],
+        ...(this.#pendingCollaborationMode
+          ? { collaborationMode: this.#pendingCollaborationMode }
+          : {}),
+      },
+    });
+    if (result.success) {
       this.#pendingStartInput = null;
+      this.#pendingStartThreadId = null;
       this.#pendingCollaborationMode = null;
     }
-    this.#suppressNextNavigation = false;
   }
 
   #normalizeSandbox(input: unknown): SandboxMode | null {
@@ -506,6 +517,7 @@ class ThreadsStore {
     this.#pendingStartCallback = null;
     this.#pendingStartErrorCallback = null;
     this.#pendingStartInput = null;
+    this.#pendingStartThreadId = null;
     this.#pendingStartModel = null;
     this.#pendingCollaborationMode = null;
     this.#suppressNextNavigation = false;
