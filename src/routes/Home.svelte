@@ -8,7 +8,8 @@
   import HomeTaskComposer from "../lib/components/HomeTaskComposer.svelte";
   import WorktreeModal from "../lib/components/WorktreeModal.svelte";
   import RecentSessionsList from "../lib/components/RecentSessionsList.svelte";
-  import type { ModeKind } from "../lib/types";
+  import { DEFAULT_SERVICE_TIER } from "../lib/runtime-controls";
+  import type { ModeKind, Personality, ReasoningEffort } from "../lib/types";
 
   const themeIcons = { system: "◐", light: "○", dark: "●" } as const;
   const RECENT_LIMIT = 5;
@@ -20,6 +21,9 @@
   let project = $state("");
   let mode = $state<ModeKind>("code");
   let selectedModel = $state("");
+  let reasoningEffort = $state<ReasoningEffort>("medium");
+  let serviceTier = $state(DEFAULT_SERVICE_TIER);
+  let personality = $state<Personality>("default");
   let worktreeModalOpen = $state(false);
 
   let isCreating = $state(false);
@@ -37,6 +41,7 @@
       selectedModel ||
       "Select model"
   );
+  const selectedModelOption = $derived(models.options.find((option) => option.value === selectedModel) ?? null);
 
   const worktreeDisplay = $derived.by(() => {
     if (!project) return "Select project";
@@ -88,11 +93,13 @@
     try {
       const effectiveModel = selectedModel.trim() || models.defaultModel?.value?.trim() || "";
       const collaborationMode = effectiveModel
-        ? threads.resolveCollaborationMode(mode, effectiveModel, "medium")
+        ? threads.resolveCollaborationMode(mode, effectiveModel, reasoningEffort)
         : undefined;
 
       threads.start(project.trim(), task.trim(), {
         ...(collaborationMode ? { collaborationMode } : {}),
+        serviceTier,
+        ...(selectedModelOption?.supportsPersonality && personality !== "default" ? { personality } : {}),
         onThreadStarted: () => clearPendingStart(token),
         onThreadStartFailed: (error) => {
           submitError = error.message || "Failed to create task";
@@ -109,6 +116,23 @@
   $effect(() => {
     if (!selectedModel && models.defaultModel) {
       selectedModel = models.defaultModel.value;
+    }
+  });
+
+  $effect(() => {
+    if (!selectedModelOption) return;
+    const supportedEfforts = selectedModelOption?.supportedReasoningEfforts;
+    if (supportedEfforts?.length && !supportedEfforts.includes(reasoningEffort)) {
+      reasoningEffort = selectedModelOption?.defaultReasoningEffort ?? supportedEfforts[0];
+    }
+
+    const supportedTiers = new Set(selectedModelOption?.serviceTiers?.map((tier) => tier.id) ?? []);
+    if (serviceTier !== DEFAULT_SERVICE_TIER && !supportedTiers.has(serviceTier)) {
+      serviceTier = DEFAULT_SERVICE_TIER;
+    }
+
+    if (!selectedModelOption.supportsPersonality && personality !== "default") {
+      personality = "default";
     }
   });
 
@@ -161,6 +185,9 @@
         modelsStatus={models.status}
         modelOptions={models.options}
         {selectedModel}
+        {reasoningEffort}
+        {serviceTier}
+        {personality}
         on:taskChange={(e) => handleTaskChange(e.detail.value)}
         on:toggleMode={() => {
           mode = mode === "plan" ? "code" : "plan";
@@ -169,6 +196,9 @@
           worktreeModalOpen = true;
         }}
         on:selectModel={(e) => handleSelectModel(e.detail.value)}
+        on:selectReasoning={(e) => reasoningEffort = e.detail.value}
+        on:selectServiceTier={(e) => serviceTier = e.detail.value}
+        on:selectPersonality={(e) => personality = e.detail.value}
         on:submit={handleSubmit}
       />
 

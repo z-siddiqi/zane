@@ -1,6 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
-  import type { ModeKind, ModelOption } from "../types";
+
+  import type { ModeKind, ModelOption, Personality, ReasoningEffort } from "../types";
+  import RuntimeControls from "./RuntimeControls.svelte";
 
   interface Props {
     task: string;
@@ -12,6 +14,9 @@
     modelsStatus: string;
     modelOptions: ModelOption[];
     selectedModel: string;
+    reasoningEffort: ReasoningEffort;
+    serviceTier: string;
+    personality: Personality;
   }
 
   const {
@@ -24,6 +29,9 @@
     modelsStatus,
     modelOptions,
     selectedModel,
+    reasoningEffort,
+    serviceTier,
+    personality,
   }: Props = $props();
 
   const dispatch = createEventDispatcher<{
@@ -32,9 +40,13 @@
     toggleMode: void;
     openWorktrees: void;
     selectModel: { value: string };
+    selectReasoning: { value: ReasoningEffort };
+    selectServiceTier: { value: string };
+    selectPersonality: { value: Personality };
   }>();
 
   let modelOpen = $state(false);
+  const selectedModelOption = $derived(modelOptions.find((option) => option.value === selectedModel) ?? null);
 
   function handleTaskKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -120,6 +132,16 @@
           </div>
         {/if}
       </div>
+
+      <RuntimeControls
+        modelOption={selectedModelOption}
+        {reasoningEffort}
+        {serviceTier}
+        {personality}
+        onReasoningChange={(value) => dispatch("selectReasoning", { value })}
+        onServiceTierChange={(value) => dispatch("selectServiceTier", { value })}
+        onPersonalityChange={(value) => dispatch("selectPersonality", { value })}
+      />
 
       <!-- Mode Toggle -->
       <button
@@ -217,6 +239,7 @@
 
   .tools {
     --row-gap: var(--space-xs);
+    flex-wrap: wrap;
   }
 
   .tool-btn {

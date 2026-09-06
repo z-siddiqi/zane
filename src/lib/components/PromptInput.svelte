@@ -1,10 +1,13 @@
 <script lang="ts">
-  import type { ModeKind, ModelOption, ReasoningEffort, Skill, FuzzyFileResult } from "../types";
+  import type { FuzzyFileResult, ModeKind, ModelOption, Personality, ReasoningEffort, Skill } from "../types";
   import { socket } from "../socket.svelte";
+  import RuntimeControls from "./RuntimeControls.svelte";
 
   interface Props {
     model: string;
     reasoningEffort: ReasoningEffort;
+    serviceTier: string;
+    personality: Personality;
     mode?: ModeKind;
     modelOptions?: ModelOption[];
     modelsLoading?: boolean;
@@ -16,12 +19,16 @@
     onQueue?: (input: string) => void;
     onModelChange: (model: string) => void;
     onReasoningChange: (effort: ReasoningEffort) => void;
+    onServiceTierChange: (tier: string) => void;
+    onPersonalityChange: (personality: Personality) => void;
     onModeChange?: (mode: ModeKind) => void;
   }
 
   const {
     model,
     reasoningEffort,
+    serviceTier,
+    personality,
     mode = "code",
     modelOptions = [],
     modelsLoading = false,
@@ -33,12 +40,13 @@
     onQueue,
     onModelChange,
     onReasoningChange,
+    onServiceTierChange,
+    onPersonalityChange,
     onModeChange,
   }: Props = $props();
 
   let input = $state("");
   let modelOpen = $state(false);
-  let reasoningOpen = $state(false);
   let textareaEl: HTMLTextAreaElement | undefined;
 
   // Skills autocomplete state
@@ -55,31 +63,10 @@
 
   const canSubmit = $derived(input.trim().length > 0);
 
-  const reasoningOptions: { value: ReasoningEffort; label: string }[] = [
-    { value: "low", label: "Low" },
-    { value: "medium", label: "Medium" },
-    { value: "high", label: "High" },
-  ];
-
   const selectedModelOption = $derived(modelOptions.find((m) => m.value === model));
-  const availableReasoningOptions = $derived.by(() => {
-    const supported = selectedModelOption?.supportedReasoningEfforts;
-    if (!supported?.length) return reasoningOptions;
-    const map = new Map(reasoningOptions.map((option) => [option.value, option]));
-    const filtered = supported
-      .map((effort) => map.get(effort))
-      .filter((option): option is { value: ReasoningEffort; label: string } => Boolean(option));
-    return filtered.length > 0 ? filtered : reasoningOptions;
-  });
 
   const selectedModel = $derived(
     modelOptions.find((m) => m.value === model)?.label || model || "Model"
-  );
-
-  const selectedReasoning = $derived(
-    availableReasoningOptions.find((r) => r.value === reasoningEffort)?.label ||
-      reasoningOptions.find((r) => r.value === reasoningEffort)?.label ||
-      "Medium"
   );
 
   const filteredSkills = $derived.by(() => {
@@ -193,7 +180,6 @@
 
   function closeAllDropdowns() {
     modelOpen = false;
-    reasoningOpen = false;
   }
 
   function handleClickOutside(e: MouseEvent) {
@@ -269,7 +255,6 @@
             onclick={(e) => {
               e.stopPropagation();
               modelOpen = !modelOpen;
-              reasoningOpen = false;
             }}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -311,56 +296,15 @@
           {/if}
         </div>
 
-        <!-- Reasoning Selector -->
-        <div class="dropdown" class:open={reasoningOpen}>
-          <button
-            type="button"
-            class="tool-btn row"
-            onclick={(e) => {
-              e.stopPropagation();
-              reasoningOpen = !reasoningOpen;
-              modelOpen = false;
-            }}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
-              <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>
-              <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>
-              <path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/>
-              <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/>
-              <path d="M3.477 10.896a4 4 0 0 1 .585-.396"/>
-              <path d="M19.938 10.5a4 4 0 0 1 .585.396"/>
-              <path d="M6 18a4 4 0 0 1-1.967-.516"/>
-              <path d="M19.967 17.484A4 4 0 0 1 18 18"/>
-            </svg>
-            <span class="collapsible-label">{selectedReasoning}</span>
-            <svg class="chevron collapsible-label" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="m6 9 6 6 6-6"/>
-            </svg>
-          </button>
-          {#if reasoningOpen}
-            <div class="dropdown-menu">
-              {#each availableReasoningOptions as option}
-                <button
-                  type="button"
-                  class="dropdown-item split"
-                  class:selected={reasoningEffort === option.value}
-                  onclick={() => {
-                    onReasoningChange(option.value);
-                    reasoningOpen = false;
-                  }}
-                >
-                  {option.label}
-                  {#if reasoningEffort === option.value}
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                      <polyline points="20 6 9 17 4 12"/>
-                    </svg>
-                  {/if}
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
+        <RuntimeControls
+          modelOption={selectedModelOption ?? null}
+          {reasoningEffort}
+          {serviceTier}
+          {personality}
+          {onReasoningChange}
+          {onServiceTierChange}
+          {onPersonalityChange}
+        />
 
         <!-- Mode Toggle -->
         {#if onModeChange}
@@ -511,6 +455,7 @@
 
   .tools {
     --row-gap: var(--space-xs);
+    flex-wrap: wrap;
   }
 
   /* Tool buttons */

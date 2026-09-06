@@ -1,5 +1,5 @@
 <script lang="ts">
-    import type { ModeKind, ReasoningEffort, SandboxMode, Skill } from "../lib/types";
+    import type { ModeKind, Personality, ReasoningEffort, SandboxMode, Skill } from "../lib/types";
     import { route } from "../router";
     import { socket } from "../lib/socket.svelte";
     import { threads } from "../lib/threads.svelte";
@@ -7,6 +7,7 @@
     import { models } from "../lib/models.svelte";
     import { theme } from "../lib/theme.svelte";
     import { codexTextInput } from "../lib/codex-input";
+    import { DEFAULT_SERVICE_TIER } from "../lib/runtime-controls";
     import AppHeader from "../lib/components/AppHeader.svelte";
     import MessageBlock from "../lib/components/MessageBlock.svelte";
     import ApprovalPrompt from "../lib/components/ApprovalPrompt.svelte";
@@ -20,6 +21,8 @@
 
     let model = $state("");
     let reasoningEffort = $state<ReasoningEffort>("medium");
+    let serviceTier = $state(DEFAULT_SERVICE_TIER);
+    let personality = $state<Personality>("default");
     let sandbox = $state<SandboxMode>("workspace-write");
     let mode = $state<ModeKind>("code");
     let modeUserOverride = false;
@@ -45,6 +48,8 @@
         const settings = threads.getSettings(threadId);
         model = settings.model;
         reasoningEffort = settings.reasoningEffort;
+        serviceTier = settings.serviceTier;
+        personality = settings.personality;
         sandbox = settings.sandbox;
         if (!modeUserOverride) {
             mode = settings.mode;
@@ -53,7 +58,7 @@
 
     $effect(() => {
         if (!threadId) return;
-        threads.updateSettings(threadId, { model, reasoningEffort, sandbox, mode });
+        threads.updateSettings(threadId, { model, reasoningEffort, serviceTier, personality, sandbox, mode });
     });
 
     $effect(() => {
@@ -67,6 +72,17 @@
                 : selectedModelOption.supportedReasoningEfforts[0];
 
         reasoningEffort = nextReasoning;
+    });
+
+    $effect(() => {
+        if (!selectedModelOption) return;
+        const supportedTiers = new Set(selectedModelOption?.serviceTiers?.map((tier) => tier.id) ?? []);
+        if (serviceTier !== DEFAULT_SERVICE_TIER && !supportedTiers.has(serviceTier)) {
+            serviceTier = DEFAULT_SERVICE_TIER;
+        }
+        if (!selectedModelOption.supportsPersonality && personality !== "default") {
+            personality = "default";
+        }
     });
 
     $effect(() => {
@@ -97,6 +113,10 @@
         }
         if (reasoningEffort) {
             params.effort = reasoningEffort;
+        }
+        params.serviceTier = serviceTier === DEFAULT_SERVICE_TIER ? null : serviceTier;
+        if (selectedModelOption?.supportsPersonality && personality !== "default") {
+            params.personality = personality;
         }
         if (sandbox) {
             const sandboxTypeMap: Record<SandboxMode, string> = {
@@ -296,6 +316,8 @@
     <PromptInput
         {model}
         {reasoningEffort}
+        {serviceTier}
+        {personality}
         {mode}
         modelOptions={models.options}
         modelsLoading={models.status === "loading"}
@@ -307,6 +329,8 @@
         onQueue={handleQueue}
         onModelChange={(v) => model = v}
         onReasoningChange={(v) => reasoningEffort = v}
+        onServiceTierChange={(v) => serviceTier = v}
+        onPersonalityChange={(v) => personality = v}
         onModeChange={(v) => { modeUserOverride = true; mode = v; }}
     />
     {#if queuedMessage}

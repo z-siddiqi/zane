@@ -1,4 +1,4 @@
-import type { ModelOption, ReasoningEffort, RpcMessage } from "./types";
+import type { ModelOption, ModelServiceTier, ReasoningEffort, RpcMessage } from "./types";
 import { socket } from "./socket.svelte";
 
 type FetchStatus = "idle" | "loading" | "success" | "error";
@@ -101,6 +101,8 @@ class ModelsStore {
       hidden: Boolean(obj.hidden),
       supportedReasoningEfforts,
       defaultReasoningEffort,
+      serviceTiers: this.#parseServiceTiers(obj.serviceTiers, obj.additionalSpeedTiers),
+      defaultServiceTier: this.#stringOrUndefined(obj.defaultServiceTier),
       inputModalities: this.#parseStringArray(obj.inputModalities),
       supportsPersonality: typeof obj.supportsPersonality === "boolean" ? obj.supportsPersonality : undefined,
       isDefault: typeof obj.isDefault === "boolean" ? obj.isDefault : undefined,
@@ -136,8 +138,39 @@ class ModelsStore {
   }
 
   #parseReasoningEffort(value: unknown): ReasoningEffort | undefined {
-    if (value === "low" || value === "medium" || value === "high") return value;
-    return undefined;
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  }
+
+  #parseServiceTiers(value: unknown, legacyValue: unknown): ModelServiceTier[] | undefined {
+    const tiers: ModelServiceTier[] = [];
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (typeof entry === "string" && entry.trim()) {
+          tiers.push({ id: entry.trim(), name: entry.trim() });
+          continue;
+        }
+        if (!entry || typeof entry !== "object") continue;
+        const item = entry as Record<string, unknown>;
+        const id = this.#stringOrUndefined(item.id);
+        if (!id) continue;
+        tiers.push({
+          id,
+          name: this.#stringOrUndefined(item.name) ?? id,
+          description: this.#stringOrUndefined(item.description),
+        });
+      }
+    }
+
+    if (Array.isArray(legacyValue)) {
+      for (const entry of legacyValue) {
+        const id = this.#stringOrUndefined(entry);
+        if (id && !tiers.some((tier) => tier.id === id)) {
+          tiers.push({ id, name: id });
+        }
+      }
+    }
+
+    return tiers.length > 0 ? tiers : undefined;
   }
 }
 

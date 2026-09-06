@@ -31,17 +31,28 @@ export interface ModelOption {
   hidden?: boolean;
   supportedReasoningEfforts?: ReasoningEffort[];
   defaultReasoningEffort?: ReasoningEffort;
+  serviceTiers?: ModelServiceTier[];
+  defaultServiceTier?: string;
   inputModalities?: string[];
   supportsPersonality?: boolean;
   isDefault?: boolean;
 }
 
-export type ReasoningEffort = "low" | "medium" | "high";
+export interface ModelServiceTier {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export type ReasoningEffort = string;
+export type Personality = "default" | "none" | "friendly" | "pragmatic";
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
 export interface ThreadSettings {
   model: string;
   reasoningEffort: ReasoningEffort;
+  serviceTier: string;
+  personality: Personality;
   sandbox: SandboxMode;
   mode: ModeKind;
 }

@@ -1,4 +1,4 @@
-import type { ApprovalPolicy, CollaborationMode, CollaborationModeMask, ModeKind, ReasoningEffort, SandboxMode, ThreadInfo, RpcMessage, ThreadSettings, TokenUsage, ThreadStatus as ThreadStatusType } from "./types";
+import type { ApprovalPolicy, CollaborationMode, CollaborationModeMask, ModeKind, Personality, ReasoningEffort, SandboxMode, ThreadInfo, RpcMessage, ThreadSettings, TokenUsage, ThreadStatus as ThreadStatusType } from "./types";
 import { codexTextInput } from "./codex-input";
 import { socket } from "./socket.svelte";
 import { models } from "./models.svelte";
@@ -10,6 +10,8 @@ const SETTINGS_STORAGE_KEY = "zane_thread_settings";
 const DEFAULT_SETTINGS: ThreadSettings = {
   model: "",
   reasoningEffort: "medium",
+  serviceTier: "default",
+  personality: "default",
   sandbox: "workspace-write",
   mode: "code",
 };
@@ -30,6 +32,8 @@ class ThreadsStore {
   #pendingStartThreadId: string | null = null;
   #pendingStartModel: string | null = null;
   #pendingCollaborationMode: CollaborationMode | null = null;
+  #pendingServiceTier = "default";
+  #pendingPersonality: Personality = "default";
   #pendingStartCallback: ((threadId: string) => void) | null = null;
   #pendingStartErrorCallback: ((error: Error) => void) | null = null;
   #suppressNextNavigation = false;
@@ -65,6 +69,8 @@ class ThreadsStore {
     if (
       current.model === next.model &&
       current.reasoningEffort === next.reasoningEffort &&
+      current.serviceTier === next.serviceTier &&
+      current.personality === next.personality &&
       current.sandbox === next.sandbox &&
       current.mode === next.mode
     ) {
@@ -109,7 +115,8 @@ class ThreadsStore {
       modelProvider?: string;
       baseInstructions?: string;
       developerInstructions?: string;
-      personality?: string;
+      serviceTier?: string;
+      personality?: Personality;
     }
   ) {
     this.#startThread(cwd, input, options);
@@ -215,6 +222,32 @@ class ThreadsStore {
       return;
     }
 
+    if (msg.method === "thread/settings/updated") {
+      const params = msg.params as {
+        threadId?: string;
+        threadSettings?: {
+          model?: string;
+          serviceTier?: string | null;
+          effort?: string | null;
+          personality?: Personality | null;
+          sandboxPolicy?: unknown;
+        };
+      };
+      const threadId = params?.threadId;
+      const settings = params?.threadSettings;
+      if (threadId && settings) {
+        const sandbox = this.#normalizeSandbox(settings.sandboxPolicy);
+        this.updateSettings(threadId, {
+          ...(settings.model ? { model: settings.model } : {}),
+          ...(settings.effort ? { reasoningEffort: settings.effort } : {}),
+          serviceTier: settings.serviceTier ?? "default",
+          personality: settings.personality ?? "default",
+          ...(sandbox ? { sandbox } : {}),
+        });
+      }
+      return;
+    }
+
     if (msg.method === "thread/name/updated") {
       const params = msg.params as { threadId: string; name: string };
       if (params?.threadId) {
@@ -311,7 +344,12 @@ class ThreadsStore {
           const sandbox = this.#normalizeSandbox(result.sandbox);
           this.updateSettings(thread.id, {
             model: result.model ?? this.#pendingStartModel ?? "",
-            reasoningEffort: result.reasoningEffort ?? DEFAULT_SETTINGS.reasoningEffort,
+            reasoningEffort: result.reasoningEffort
+              ?? this.#pendingCollaborationMode?.settings?.reasoning_effort
+              ?? DEFAULT_SETTINGS.reasoningEffort,
+            serviceTier: this.#pendingServiceTier,
+            personality: this.#pendingPersonality,
+            mode: this.#pendingCollaborationMode?.mode ?? DEFAULT_SETTINGS.mode,
             ...(sandbox ? { sandbox } : {}),
           });
 
@@ -424,12 +462,18 @@ class ThreadsStore {
         ...(this.#pendingCollaborationMode
           ? { collaborationMode: this.#pendingCollaborationMode }
           : {}),
+        serviceTier: this.#pendingServiceTier === "default" ? null : this.#pendingServiceTier,
+        ...(this.#pendingPersonality !== "default"
+          ? { personality: this.#pendingPersonality }
+          : {}),
       },
     });
     if (result.success) {
       this.#pendingStartInput = null;
       this.#pendingStartThreadId = null;
       this.#pendingCollaborationMode = null;
+      this.#pendingServiceTier = "default";
+      this.#pendingPersonality = "default";
     }
   }
 
@@ -469,7 +513,8 @@ class ThreadsStore {
       modelProvider?: string;
       baseInstructions?: string;
       developerInstructions?: string;
-      personality?: string;
+      serviceTier?: string;
+      personality?: Personality;
     }
   ) {
     const requestedModel = this.#resolveStartModel(options?.collaborationMode);
@@ -478,6 +523,8 @@ class ThreadsStore {
     this.#pendingStartInput = input?.trim() ? input.trim() : null;
     this.#pendingStartModel = requestedModel;
     this.#pendingCollaborationMode = options?.collaborationMode ?? null;
+    this.#pendingServiceTier = options?.serviceTier ?? "default";
+    this.#pendingPersonality = options?.personality ?? "default";
     this.#pendingStartCallback = options?.onThreadStarted ?? null;
     this.#pendingStartErrorCallback = options?.onThreadStartFailed ?? null;
     this.#suppressNextNavigation = options?.suppressNavigation ?? false;
@@ -492,7 +539,12 @@ class ThreadsStore {
         ...(options?.modelProvider ? { modelProvider: options.modelProvider } : {}),
         ...(options?.baseInstructions ? { baseInstructions: options.baseInstructions } : {}),
         ...(options?.developerInstructions ? { developerInstructions: options.developerInstructions } : {}),
-        ...(options?.personality ? { personality: options.personality } : {}),
+        ...(options?.serviceTier && options.serviceTier !== "default"
+          ? { serviceTier: options.serviceTier }
+          : {}),
+        ...(options?.personality && options.personality !== "default"
+          ? { personality: options.personality }
+          : {}),
       },
     });
     if (!sendResult.success) {
@@ -520,6 +572,8 @@ class ThreadsStore {
     this.#pendingStartThreadId = null;
     this.#pendingStartModel = null;
     this.#pendingCollaborationMode = null;
+    this.#pendingServiceTier = "default";
+    this.#pendingPersonality = "default";
     this.#suppressNextNavigation = false;
   }
 
