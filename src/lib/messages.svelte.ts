@@ -348,7 +348,7 @@ class MessagesStore {
       const plan = Array.isArray(params.plan)
         ? params.plan.filter(isRecord).map((step) => ({
           step: stringValue(step.step),
-          status: stringValue(step.status) as PlanStep["status"],
+          status: normalizePlanStepStatus(step.status),
         }))
         : this.#view(threadId).plan;
       this.#setView(threadId, {
@@ -694,6 +694,15 @@ function stringValue(value: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizePlanStepStatus(value: unknown): PlanStep["status"] {
+  if (typeof value !== "string") return "Pending";
+  switch (value.replace(/[_-]/g, "").toLowerCase()) {
+    case "completed": return "Completed";
+    case "inprogress": return "InProgress";
+    default: return "Pending";
+  }
 }
 
 function getStore(): MessagesStore {
