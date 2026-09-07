@@ -161,7 +161,7 @@ class ModelsStore {
       }
     }
 
-    if (Array.isArray(legacyValue)) {
+    if (tiers.length === 0 && Array.isArray(legacyValue)) {
       for (const entry of legacyValue) {
         const id = this.#stringOrUndefined(entry);
         if (id && !tiers.some((tier) => tier.id === id)) {
