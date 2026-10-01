@@ -2,6 +2,7 @@ import type {
   AccountInfo,
   AccountPayload,
   AccountReadResponse,
+  AccountTokenUsageResponse,
   RateLimitSnapshot,
   RateLimitResetCreditConsumeResponse,
   RateLimitResetCreditsSummary,
@@ -50,6 +51,7 @@ class AccountStore {
   rateLimits = $state<RateLimitSnapshot | null>(null);
   rateLimitsByLimitId = $state<Record<string, RateLimitSnapshot> | null>(null);
   rateLimitResetCredits = $state<RateLimitResetCreditsSummary | null>(null);
+  usage = $state<AccountTokenUsageResponse | null>(null);
   loading = $state(false);
   error = $state<string | null>(null);
 
@@ -74,9 +76,10 @@ class AccountStore {
     this.error = null;
 
     try {
-      const [accountResult, limitsResult] = await Promise.allSettled([
+      const [accountResult, limitsResult, usageResult] = await Promise.allSettled([
         socket.accountRead(),
         socket.accountRateLimits(),
+        socket.accountUsage(),
       ]);
 
       if (accountResult.status === "fulfilled") {
@@ -84,6 +87,9 @@ class AccountStore {
       }
       if (limitsResult.status === "fulfilled") {
         this.#applyRateLimits(limitsResult.value);
+      }
+      if (usageResult.status === "fulfilled") {
+        this.usage = usageResult.value;
       }
       if (accountResult.status === "rejected" && limitsResult.status === "rejected") {
         this.error = "Failed to load account info";
@@ -99,6 +105,7 @@ class AccountStore {
     this.rateLimits = null;
     this.rateLimitsByLimitId = null;
     this.rateLimitResetCredits = null;
+    this.usage = null;
     this.loading = false;
     this.error = null;
   }

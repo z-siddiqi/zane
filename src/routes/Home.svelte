@@ -8,14 +8,14 @@
   import HomeTaskComposer from "../lib/components/HomeTaskComposer.svelte";
   import WorktreeModal from "../lib/components/WorktreeModal.svelte";
   import RecentSessionsList from "../lib/components/RecentSessionsList.svelte";
+  import UsageCard from "../lib/components/UsageCard.svelte";
   import { DEFAULT_SERVICE_TIER } from "../lib/runtime-controls";
   import type { ModeKind, Personality, ReasoningEffort } from "../lib/types";
 
   const themeIcons = { system: "◐", light: "○", dark: "●" } as const;
-  const RECENT_LIMIT = 5;
+  const RECENT_LIMIT = 3;
 
   const recentThreads = $derived(threads.list.slice(0, RECENT_LIMIT));
-  const hasMoreThreads = $derived(threads.list.length > RECENT_LIMIT);
 
   let task = $state("");
   let project = $state("");
@@ -175,39 +175,41 @@
 
   <main class="hero">
     <div class="hero-content">
-      <HomeTaskComposer
-        task={task}
-        mode={mode}
-        {isCreating}
-        {canSubmit}
-        {worktreeDisplay}
-        {currentModelLabel}
-        modelsStatus={models.status}
-        modelOptions={models.options}
-        {selectedModel}
-        {reasoningEffort}
-        {serviceTier}
-        {personality}
-        on:taskChange={(e) => handleTaskChange(e.detail.value)}
-        on:toggleMode={() => {
-          mode = mode === "plan" ? "code" : "plan";
-        }}
-        on:openWorktrees={() => {
-          worktreeModalOpen = true;
-        }}
-        on:selectModel={(e) => handleSelectModel(e.detail.value)}
-        on:selectReasoning={(e) => reasoningEffort = e.detail.value}
-        on:selectServiceTier={(e) => serviceTier = e.detail.value}
-        on:selectPersonality={(e) => personality = e.detail.value}
-        on:submit={handleSubmit}
-      />
+      <div class="composer">
+        <HomeTaskComposer
+          task={task}
+          mode={mode}
+          {isCreating}
+          {canSubmit}
+          {worktreeDisplay}
+          {currentModelLabel}
+          modelsStatus={models.status}
+          modelOptions={models.options}
+          {selectedModel}
+          {reasoningEffort}
+          {serviceTier}
+          {personality}
+          on:taskChange={(e) => handleTaskChange(e.detail.value)}
+          on:toggleMode={() => {
+            mode = mode === "plan" ? "code" : "plan";
+          }}
+          on:openWorktrees={() => {
+            worktreeModalOpen = true;
+          }}
+          on:selectModel={(e) => handleSelectModel(e.detail.value)}
+          on:selectReasoning={(e) => reasoningEffort = e.detail.value}
+          on:selectServiceTier={(e) => serviceTier = e.detail.value}
+          on:selectPersonality={(e) => personality = e.detail.value}
+          on:submit={handleSubmit}
+        />
+      </div>
 
       <RecentSessionsList
         loading={threads.loading}
         {recentThreads}
-        {hasMoreThreads}
-        on:refresh={() => threads.fetch()}
       />
+
+      <UsageCard />
     </div>
   </main>
 </div>
@@ -233,19 +235,23 @@
 
   .hero {
     display: flex;
-    align-items: center;
     justify-content: center;
-    min-height: calc(100vh - 3rem);
-    padding: var(--space-md);
+    padding: 12vh var(--space-md) var(--space-xl);
   }
 
   .hero-content {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: var(--space-md);
+    gap: var(--space-xl);
     width: 100%;
     max-width: var(--app-max-width);
+  }
+
+  .composer {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
   }
 
   .error {

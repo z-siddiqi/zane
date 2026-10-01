@@ -278,6 +278,24 @@ export interface RateLimitsResponse {
   rateLimitResetCredits?: RateLimitResetCreditsSummary | null;
 }
 
+export interface AccountTokenUsageSummary {
+  lifetimeTokens?: number | null;
+  peakDailyTokens?: number | null;
+  longestRunningTurnSec?: number | null;
+  currentStreakDays?: number | null;
+  longestStreakDays?: number | null;
+}
+
+export interface AccountTokenUsageDailyBucket {
+  startDate: string;
+  tokens: number;
+}
+
+export interface AccountTokenUsageResponse {
+  summary: AccountTokenUsageSummary;
+  dailyUsageBuckets?: AccountTokenUsageDailyBucket[] | null;
+}
+
 export interface RateLimitResetCreditConsumeResponse {
   outcome: string;
 }

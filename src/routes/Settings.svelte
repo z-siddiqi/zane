@@ -7,6 +7,7 @@
   import { account } from "../lib/account.svelte";
   import AppHeader from "../lib/components/AppHeader.svelte";
   import NotificationSettings from "../lib/components/NotificationSettings.svelte";
+  import TokenActivity from "../lib/components/TokenActivity.svelte";
   import { anchors } from "../lib/anchors.svelte";
 
   const themeIcons = { system: "◐", light: "○", dark: "●" } as const;
@@ -20,6 +21,31 @@
     if (entries.length > 0) return entries;
     return rateLimits ? [[rateLimits.limitId ?? "default", rateLimits] as const] : [];
   });
+
+  const resetOutcomes: Record<string, string> = {
+    reset: "Limits reset.",
+    nothingToReset: "Nothing to reset yet.",
+    noCredit: "No reset credits left.",
+    alreadyRedeemed: "That reset was already used.",
+  };
+
+  let confirmingReset = $state(false);
+  let resetting = $state(false);
+  let resetMessage = $state<string | null>(null);
+  const availableCredits = $derived(Number(account.rateLimitResetCredits?.availableCount ?? 0));
+
+  async function useReset() {
+    resetting = true;
+    try {
+      const result = await account.consumeResetCredit();
+      resetMessage = resetOutcomes[result.outcome] ?? result.outcome;
+    } catch (err) {
+      resetMessage = err instanceof Error ? err.message : "Reset failed.";
+    } finally {
+      resetting = false;
+      confirmingReset = false;
+    }
+  }
 
   $effect(() => {
     if (socket.status === "connected") {
@@ -37,6 +63,10 @@
       hour: "2-digit",
       minute: "2-digit",
     });
+  }
+
+  function formatDate(seconds: number): string {
+    return new Date(seconds * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
 
   function formatReset(seconds: number | null | undefined): string {
@@ -193,6 +223,23 @@
 
     <div class="section stack">
       <div class="section-header">
+        <span class="section-title">Token activity</span>
+      </div>
+      <div class="section-body stack">
+        {#if account.usage}
+          <TokenActivity usage={account.usage} />
+        {:else if account.loading}
+          <p class="hint">Loading usage...</p>
+        {:else if isSocketConnected}
+          <p class="hint">Usage history unavailable.</p>
+        {:else}
+          <p class="hint">Connect to view token activity.</p>
+        {/if}
+      </div>
+    </div>
+
+    <div class="section stack">
+      <div class="section-header">
         <span class="section-title">Account</span>
       </div>
       <div class="section-body stack">
@@ -277,13 +324,32 @@
                 {#if account.rateLimitResetCredits}
                   <div class="rate-limit-row split">
                     <span class="account-label">reset credits</span>
-                    <span class="account-value">{String(account.rateLimitResetCredits.availableCount)} available</span>
+                    <span class="account-value nowrap">
+                      {availableCredits} available
+                      {#if availableCredits > 0 && !confirmingReset}
+                        <button type="button" class="reset-btn" onclick={() => (confirmingReset = true)}>use</button>
+                      {/if}
+                    </span>
                   </div>
+                  {#if confirmingReset}
+                    <div class="rate-limit-row split">
+                      <span class="account-label">Use 1 of {availableCredits} reset credits?</span>
+                      <span class="account-value nowrap">
+                        <button type="button" class="reset-btn warning-btn" disabled={resetting} onclick={useReset}>
+                          {resetting ? "resetting..." : "reset"}
+                        </button>
+                        <button type="button" class="reset-btn" disabled={resetting} onclick={() => (confirmingReset = false)}>cancel</button>
+                      </span>
+                    </div>
+                  {/if}
+                  {#if resetMessage}
+                    <p class="hint">{resetMessage}</p>
+                  {/if}
                   {#if account.rateLimitResetCredits.credits?.length}
                     {#each account.rateLimitResetCredits.credits as credit}
                       <div class="rate-limit-row split">
                         <span class="account-label">{credit.title || credit.resetType}</span>
-                        <span class="account-value">{credit.expiresAt ? `expires ${formatTimestamp(credit.expiresAt)}` : credit.status}</span>
+                        <span class="account-value nowrap">{credit.expiresAt ? `expires ${formatDate(credit.expiresAt)}` : credit.status}</span>
                       </div>
                     {/each}
                   {/if}
@@ -523,6 +589,38 @@
   .account-value {
     color: var(--cli-text);
     text-align: right;
+  }
+
+  .nowrap {
+    white-space: nowrap;
+  }
+
+  .reset-btn {
+    margin-left: var(--space-xs);
+    padding: 0 var(--space-xs);
+    background: transparent;
+    border: 1px solid var(--cli-border);
+    border-radius: var(--radius-sm);
+    color: var(--cli-text);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .reset-btn:hover:enabled {
+    background: var(--cli-bg-hover);
+    border-color: var(--cli-text-muted);
+  }
+
+  .reset-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .warning-btn {
+    border-color: var(--cli-warning);
+    color: var(--cli-warning);
   }
 
   .warning-value {

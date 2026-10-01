@@ -1,5 +1,6 @@
 import type {
   AccountReadResponse,
+  AccountTokenUsageResponse,
   ConnectionStatus,
   FuzzyFileResult,
   GitInspectResult,
@@ -417,6 +418,21 @@ class SocketStore {
         reject,
       });
       const result = this.send({ id, method: "account/rateLimits/read", params: {} });
+      if (!result.success) {
+        this.#pendingRpc.delete(id);
+        reject(new Error(result.error ?? "Not connected"));
+      }
+    });
+  }
+
+  accountUsage(): Promise<AccountTokenUsageResponse> {
+    const id = `account-usage-${++this.#rpcIdCounter}`;
+    return new Promise((resolve, reject) => {
+      this.#pendingRpc.set(id, {
+        resolve: (v) => resolve(v as AccountTokenUsageResponse),
+        reject,
+      });
+      const result = this.send({ id, method: "account/usage/read", params: {} });
       if (!result.success) {
         this.#pendingRpc.delete(id);
         reject(new Error(result.error ?? "Not connected"));
