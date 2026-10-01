@@ -2,7 +2,11 @@
 
 Zane lets you monitor and control [Codex CLI](https://github.com/openai/codex) sessions running on your Mac from your phone, tablet, or any browser. Start tasks, watch real-time output, approve file writes, and review diffs from a handheld web client while your agent runs locally.
 
-<img src="docs/assets/demo.gif" alt="Zane demo" width="320" />
+<p>
+  <img src="docs/assets/screenshots/home.png" alt="Home: start a task, recent sessions and usage" width="240" />
+  <img src="docs/assets/screenshots/inbox.png" alt="Inbox: approvals and questions waiting on you" width="240" />
+  <img src="docs/assets/screenshots/chat.png" alt="Chat: review changes and approve commands" width="240" />
+</p>
 
 ## Features
 
