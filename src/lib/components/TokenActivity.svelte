@@ -2,15 +2,13 @@
   import type { AccountTokenUsageResponse } from "../types";
 
   const DAY_MS = 86_400_000;
-  const WEEKDAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""];
 
   interface Props {
     usage: AccountTokenUsageResponse;
-    weeks?: number;
-    compact?: boolean;
+    weeks: number;
   }
 
-  const { usage, weeks: weekCount = 53, compact = false }: Props = $props();
+  const { usage, weeks: weekCount }: Props = $props();
 
   interface Cell {
     date: string;
@@ -68,19 +66,7 @@
     return { weeks, months };
   });
 
-  const stats = $derived.by(() => {
-    const s = usage.summary;
-    return [
-      { label: "lifetime", value: formatTokens(s.lifetimeTokens) },
-      { label: "peak day", value: formatTokens(s.peakDailyTokens) },
-      { label: "longest turn", value: formatDuration(s.longestRunningTurnSec) },
-      { label: "streak", value: formatDays(s.currentStreakDays) },
-      { label: "best streak", value: formatDays(s.longestStreakDays) },
-    ];
-  });
-
-  function formatTokens(value: number | null | undefined): string {
-    if (value == null) return "—";
+  function formatTokens(value: number): string {
     const units: [number, string][] = [
       [1e9, "B"],
       [1e6, "M"],
@@ -90,18 +76,6 @@
       if (value >= size) return `${(value / size).toFixed(1).replace(/\.0$/, "")}${suffix}`;
     }
     return String(value);
-  }
-
-  function formatDuration(seconds: number | null | undefined): string {
-    if (seconds == null) return "—";
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-  }
-
-  function formatDays(days: number | null | undefined): string {
-    if (days == null) return "—";
-    return `${days} ${days === 1 ? "day" : "days"}`;
   }
 
   function cellTitle(cell: Cell): string {
@@ -114,102 +88,35 @@
     });
     return `${date}: ${cell.tokens > 0 ? `${formatTokens(cell.tokens)} tokens` : "no activity"}`;
   }
-
-  function scrollToEnd(node: HTMLElement) {
-    node.scrollLeft = node.scrollWidth;
-  }
 </script>
 
-<div class="token-activity stack" class:compact style:--weeks={weekCount}>
-  {#if !compact}
-    <div class="stats">
-      {#each stats as stat}
-        <div class="stat">
-          <span class="stat-value">{stat.value}</span>
-          <span class="stat-label">{stat.label}</span>
-        </div>
-      {/each}
-    </div>
-  {/if}
-
-  <div class="heatmap-scroll" use:scrollToEnd>
-    <div class="heatmap">
-      {#if !compact}
-        <div class="weekdays">
-          <span class="month-spacer"></span>
-          {#each WEEKDAY_LABELS as label}
-            <span class="weekday">{label}</span>
-          {/each}
-        </div>
-      {/if}
-      {#each grid.weeks as week, index}
-        <div class="week">
-          <span class="month">{grid.months[index]}</span>
-          {#each week as cell (cell.date)}
-            <span
-              class="cell level-{cell.level}"
-              class:future={cell.future}
-              title={cell.future ? undefined : cellTitle(cell)}
-            ></span>
-          {/each}
-        </div>
-      {/each}
-    </div>
+<div class="token-activity" style:--weeks={weekCount}>
+  <div class="heatmap">
+    {#each grid.weeks as week, index}
+      <div class="week">
+        <span class="month">{grid.months[index]}</span>
+        {#each week as cell (cell.date)}
+          <span
+            class="cell level-{cell.level}"
+            class:future={cell.future}
+            title={cell.future ? undefined : cellTitle(cell)}
+          ></span>
+        {/each}
+      </div>
+    {/each}
   </div>
-
-  {#if !compact}
-    <div class="legend">
-      <span>less</span>
-      {#each [0, 1, 2, 3, 4] as level}
-        <span class="cell level-{level}"></span>
-      {/each}
-      <span>more</span>
-    </div>
-  {/if}
 </div>
 
 <style>
   .token-activity {
-    --stack-gap: var(--space-md);
-    --cell: 10px;
     --cell-gap: 3px;
     --heat: var(--cli-prefix-agent);
-  }
-
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr));
-    gap: var(--space-sm);
-  }
-
-  .stat {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .stat-value {
-    color: var(--cli-text);
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .stat-label {
-    color: var(--cli-text-dim);
-    font-size: var(--text-xs);
-  }
-
-  .heatmap-scroll {
     container-type: inline-size;
-    overflow-x: auto;
-  }
-
-  .compact .heatmap-scroll {
     overflow: hidden;
   }
 
   .heatmap {
-    --cell: clamp(10px, calc((100cqi - 2rem) / (var(--weeks) + 1) - var(--cell-gap)), 16px);
+    --cell: clamp(6px, calc(100cqi / var(--weeks) - var(--cell-gap)), 16px);
     display: flex;
     gap: var(--cell-gap);
     width: max-content;
@@ -217,27 +124,10 @@
     color: var(--cli-text-dim);
   }
 
-  .compact .heatmap {
-    --cell: clamp(6px, calc(100cqi / var(--weeks) - var(--cell-gap)), 16px);
-  }
-
-  .weekdays,
   .week {
     display: grid;
     grid-template-rows: 14px repeat(7, var(--cell));
     gap: var(--cell-gap);
-  }
-
-  .weekdays {
-    position: sticky;
-    left: 0;
-    z-index: 1;
-    background: var(--cli-bg);
-  }
-
-  .weekday {
-    line-height: var(--cell);
-    padding-right: var(--space-xs);
   }
 
   .month {
@@ -254,8 +144,7 @@
 
   .level-0 {
     background: var(--cli-bg-elevated);
-    outline: 1px solid var(--cli-border);
-    outline-offset: -1px;
+    box-shadow: inset 0 0 0 1px var(--cli-border);
   }
 
   .level-1 {
@@ -276,14 +165,5 @@
 
   .cell.future {
     visibility: hidden;
-  }
-
-  .legend {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: var(--space-xs);
-    font-size: var(--text-xs);
-    color: var(--cli-text-dim);
   }
 </style>

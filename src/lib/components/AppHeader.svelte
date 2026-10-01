@@ -5,6 +5,8 @@
     import { connectionManager } from "../connection-manager.svelte";
     import { messages } from "../messages.svelte";
     import ShimmerDot from "./ShimmerDot.svelte";
+    import { isTabRoute } from "./BottomNav.svelte";
+    import { route } from "../../router";
 
     interface Props {
         status: ConnectionStatus;
@@ -34,6 +36,7 @@
     ];
 
     const statusMeta = $derived(statusConfig[status]);
+    const tabbed = $derived(isTabRoute(route.pathname));
     const selectedSandbox = $derived(sandboxOptions.find((s) => s.value === sandbox) || sandboxOptions[1]);
     const canReconnect = $derived(status === "error" || status === "disconnected");
     const pendingRequests = $derived(messages.pendingThreadRequests);
@@ -68,7 +71,7 @@
 
 <svelte:window onclick={handleClickOutside} />
 
-<header class="app-header">
+<header class="app-header" class:tabbed>
     <div class="app-header-inner row">
         <a href="/app" class="brand">zane</a>
         <span class="separator">·</span>
@@ -95,7 +98,7 @@
         {#if pendingRequestThreadId && pendingRequestCount > 0}
             <a
                 class="pending-request"
-                href={`/thread/${pendingRequestThreadId}`}
+                href={pendingRequests.length === 1 ? `/thread/${pendingRequestThreadId}` : "/inbox"}
                 title={`${pendingRequestCount} request${pendingRequestCount === 1 ? "" : "s"} waiting for input`}
             >
                 <span aria-hidden="true">!</span>
@@ -190,6 +193,7 @@
         position: relative;
         width: 100vw;
         margin-left: calc(50% - 50vw);
+        padding-top: env(safe-area-inset-top, 0px);
         background: var(--cli-bg-elevated);
         border-bottom: 1px solid var(--cli-border);
         font-family: var(--font-mono);
@@ -446,6 +450,18 @@
 
     @media (min-width: 640px) {
         .hamburger-btn {
+            display: none;
+        }
+    }
+
+    /* The bottom nav handles navigation on tab pages; keep only non-link actions inline. */
+    @media (max-width: 639px) {
+        .tabbed .desktop-actions {
+            display: flex;
+        }
+
+        .tabbed .desktop-actions :global(a),
+        .tabbed .hamburger-btn {
             display: none;
         }
     }

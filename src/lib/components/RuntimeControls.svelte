@@ -16,6 +16,7 @@
     onReasoningChange: (effort: ReasoningEffort) => void;
     onServiceTierChange: (tier: string) => void;
     onPersonalityChange: (personality: Personality) => void;
+    menusBelow?: boolean;
   }
 
   const {
@@ -26,6 +27,7 @@
     onReasoningChange,
     onServiceTierChange,
     onPersonalityChange,
+    menusBelow = false,
   }: Props = $props();
 
   let openMenu = $state<"reasoning" | "tier" | "personality" | null>(null);
@@ -75,7 +77,7 @@
       </svg>
     </button>
     {#if openMenu === "reasoning"}
-      <div class="dropdown-menu">
+      <div class="dropdown-menu" class:below={menusBelow}>
         {#each reasoningOptions as option}
           <button
             type="button"
@@ -112,7 +114,7 @@
         </svg>
       </button>
       {#if openMenu === "tier"}
-        <div class="dropdown-menu">
+        <div class="dropdown-menu" class:below={menusBelow}>
           {#each tierOptions as option}
             <button
               type="button"
@@ -152,7 +154,7 @@
         </svg>
       </button>
       {#if openMenu === "personality"}
-        <div class="dropdown-menu align-right">
+        <div class="dropdown-menu align-right" class:below={menusBelow}>
           {#each PERSONALITY_OPTIONS as option}
             <button
               type="button"
@@ -231,6 +233,13 @@
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-popover);
     z-index: 110;
+  }
+
+  .dropdown-menu.below {
+    top: 100%;
+    bottom: auto;
+    margin-top: var(--space-xs);
+    margin-bottom: 0;
   }
 
   .dropdown-menu.align-right {

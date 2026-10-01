@@ -20,6 +20,7 @@ class ThreadsStore {
   list = $state<ThreadInfo[]>([]);
   currentId = $state<string | null>(null);
   loading = $state(false);
+  nextCursor = $state<string | null>(null);
   #threadStatusById = $state<Map<string, ThreadStatusType>>(new Map());
   #tokenUsageById = $state<Map<string, TokenUsage>>(new Map());
 
@@ -81,13 +82,22 @@ class ThreadsStore {
   }
 
   fetch() {
+    this.#requestList("list", null);
+  }
+
+  fetchMore() {
+    if (!this.nextCursor || this.loading) return;
+    this.#requestList("listMore", this.nextCursor);
+  }
+
+  #requestList(type: "list" | "listMore", cursor: string | null) {
     const id = this.#nextId++;
     this.loading = true;
-    this.#pendingRequests.set(id, "list");
+    this.#pendingRequests.set(id, type);
     socket.send({
       method: "thread/list",
       id,
-      params: { cursor: null, limit: 25 },
+      params: { cursor, limit: 50 },
     });
   }
 
@@ -302,12 +312,16 @@ class ThreadsStore {
       const type = this.#pendingRequests.get(msg.id as number);
       this.#pendingRequests.delete(msg.id as number);
 
-      if (type === "list" && msg.result) {
-        const result = msg.result as { data: ThreadInfo[] };
-        this.list = result.data || [];
+      if (type === "list" || type === "listMore") {
+        this.loading = false;
+        const result = msg.result as { data?: ThreadInfo[]; nextCursor?: string | null } | undefined;
+        if (result) {
+          const page = result.data || [];
+          const known = new Set(this.list.map((t) => t.id));
+          this.list = type === "list" ? page : [...this.list, ...page.filter((t) => !known.has(t.id))];
+          this.nextCursor = result.nextCursor ?? null;
+        }
       }
-
-      if (type === "list") this.loading = false;
 
       if (type === "fork" && msg.result) {
         const result = msg.result as { thread?: ThreadInfo };

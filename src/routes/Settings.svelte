@@ -7,7 +7,6 @@
   import { account } from "../lib/account.svelte";
   import AppHeader from "../lib/components/AppHeader.svelte";
   import NotificationSettings from "../lib/components/NotificationSettings.svelte";
-  import TokenActivity from "../lib/components/TokenActivity.svelte";
   import { anchors } from "../lib/anchors.svelte";
 
   const themeIcons = { system: "◐", light: "○", dark: "●" } as const;
@@ -222,25 +221,11 @@
     <NotificationSettings />
 
     <div class="section stack">
-      <div class="section-header">
-        <span class="section-title">Token activity</span>
-      </div>
-      <div class="section-body stack">
-        {#if account.usage}
-          <TokenActivity usage={account.usage} />
-        {:else if account.loading}
-          <p class="hint">Loading usage...</p>
-        {:else if isSocketConnected}
-          <p class="hint">Usage history unavailable.</p>
-        {:else}
-          <p class="hint">Connect to view token activity.</p>
-        {/if}
-      </div>
-    </div>
-
-    <div class="section stack">
-      <div class="section-header">
+      <div class="section-header split">
         <span class="section-title">Account</span>
+        {#if !auth.isLocalMode}
+          <button class="sign-out" type="button" onclick={() => auth.signOut()}>sign out</button>
+        {/if}
       </div>
       <div class="section-body stack">
         {#if accountError}
@@ -324,27 +309,8 @@
                 {#if account.rateLimitResetCredits}
                   <div class="rate-limit-row split">
                     <span class="account-label">reset credits</span>
-                    <span class="account-value nowrap">
-                      {availableCredits} available
-                      {#if availableCredits > 0 && !confirmingReset}
-                        <button type="button" class="reset-btn" onclick={() => (confirmingReset = true)}>use</button>
-                      {/if}
-                    </span>
+                    <span class="account-value">{availableCredits} available</span>
                   </div>
-                  {#if confirmingReset}
-                    <div class="rate-limit-row split">
-                      <span class="account-label">Use 1 of {availableCredits} reset credits?</span>
-                      <span class="account-value nowrap">
-                        <button type="button" class="reset-btn warning-btn" disabled={resetting} onclick={useReset}>
-                          {resetting ? "resetting..." : "reset"}
-                        </button>
-                        <button type="button" class="reset-btn" disabled={resetting} onclick={() => (confirmingReset = false)}>cancel</button>
-                      </span>
-                    </div>
-                  {/if}
-                  {#if resetMessage}
-                    <p class="hint">{resetMessage}</p>
-                  {/if}
                   {#if account.rateLimitResetCredits.credits?.length}
                     {#each account.rateLimitResetCredits.credits as credit}
                       <div class="rate-limit-row split">
@@ -352,6 +318,27 @@
                         <span class="account-value nowrap">{credit.expiresAt ? `expires ${formatDate(credit.expiresAt)}` : credit.status}</span>
                       </div>
                     {/each}
+                  {/if}
+                  {#if availableCredits > 0}
+                    <div class="setting-row">
+                      {#if confirmingReset}
+                        <span class="setting-label">Use 1 of {availableCredits} credits?</span>
+                        <div class="btn-group">
+                          <button type="button" class="setting-btn warning-btn" disabled={resetting} onclick={useReset}>
+                            {resetting ? "Resetting..." : "Reset"}
+                          </button>
+                          <button type="button" class="setting-btn" disabled={resetting} onclick={() => (confirmingReset = false)}>
+                            Cancel
+                          </button>
+                        </div>
+                      {:else}
+                        <span class="setting-label">Reset usage limits</span>
+                        <button type="button" class="setting-btn" onclick={() => (confirmingReset = true)}>Use</button>
+                      {/if}
+                    </div>
+                  {/if}
+                  {#if resetMessage}
+                    <p class="hint">{resetMessage}</p>
                   {/if}
                 {/if}
               </div>
@@ -361,10 +348,6 @@
           <p class="hint">Loading account info...</p>
         {:else}
           <p class="hint">Connect to view account info.</p>
-        {/if}
-
-        {#if !auth.isLocalMode}
-          <button class="sign-out-btn" type="button" onclick={() => auth.signOut()}>Sign out</button>
         {/if}
       </div>
     </div>
@@ -595,25 +578,43 @@
     white-space: nowrap;
   }
 
-  .reset-btn {
-    margin-left: var(--space-xs);
-    padding: 0 var(--space-xs);
-    background: transparent;
+  .setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    padding-top: var(--space-xs);
+  }
+
+  .setting-label {
+    font-size: var(--text-xs);
+    color: var(--cli-text);
+  }
+
+  .btn-group {
+    display: flex;
+    gap: var(--space-xs);
+  }
+
+  .setting-btn {
+    padding: var(--space-xs) var(--space-sm);
     border: 1px solid var(--cli-border);
     border-radius: var(--radius-sm);
-    color: var(--cli-text);
+    background: transparent;
+    color: var(--cli-text-dim);
     font-family: var(--font-mono);
     font-size: var(--text-xs);
     cursor: pointer;
     transition: all var(--transition-fast);
   }
 
-  .reset-btn:hover:enabled {
-    background: var(--cli-bg-hover);
+  .setting-btn:hover:enabled {
+    background: var(--cli-selection);
+    color: var(--cli-text);
     border-color: var(--cli-text-muted);
   }
 
-  .reset-btn:disabled {
+  .setting-btn:disabled {
     opacity: 0.6;
     cursor: not-allowed;
   }
@@ -637,21 +638,17 @@
     border-top: 1px solid var(--cli-border);
   }
 
-  .sign-out-btn {
-    align-self: flex-start;
-    padding: var(--space-xs) var(--space-sm);
+  .sign-out {
+    padding: 0;
+    border: none;
     background: transparent;
-    border: 1px solid var(--cli-border);
-    border-radius: var(--radius-sm);
-    color: var(--cli-error, #ef4444);
+    color: var(--cli-error);
     font-family: var(--font-mono);
     font-size: var(--text-xs);
     cursor: pointer;
-    transition: all var(--transition-fast);
   }
 
-  .sign-out-btn:hover {
-    background: var(--cli-error-bg);
-    border-color: var(--cli-error, #ef4444);
+  .sign-out:hover {
+    text-decoration: underline;
   }
 </style>

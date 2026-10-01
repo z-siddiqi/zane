@@ -345,6 +345,7 @@
     .thread-page {
         --stack-gap: 0;
         height: 100%;
+        padding-bottom: env(safe-area-inset-bottom, 0px);
         background: var(--cli-bg);
     }
 

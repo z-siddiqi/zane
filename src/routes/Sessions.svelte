@@ -23,6 +23,14 @@
       threads.fetch();
     }
   });
+
+  function loadMoreWhenVisible(node: HTMLElement) {
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) threads.fetchMore();
+    }, { rootMargin: "100%" });
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
+  }
 </script>
 
 <svelte:head>
@@ -40,16 +48,7 @@
   </AppHeader>
 
   <main class="sessions-content stack">
-    <div class="section-header split">
-      <div class="section-title-row row">
-        <span class="section-title">All Sessions</span>
-      </div>
-      <div class="section-actions row">
-        <button class="refresh-btn" onclick={() => threads.fetch()} title="Refresh">↻</button>
-      </div>
-    </div>
-
-    {#if threads.loading}
+    {#if threads.loading && threads.list.length === 0}
       <div class="loading row">
         <ShimmerDot /> Loading sessions...
       </div>
@@ -72,6 +71,13 @@
           </li>
         {/each}
       </ul>
+      {#if threads.nextCursor}
+        {#key threads.list.length}
+          <div class="loading row" use:loadMoreWhenVisible>
+            <ShimmerDot /> Loading more...
+          </div>
+        {/key}
+      {/if}
     {/if}
   </main>
 </div>
@@ -92,43 +98,6 @@
     margin: 0 auto;
     padding: var(--space-lg) var(--space-md) var(--space-xl);
     --stack-gap: var(--space-sm);
-  }
-
-  .section-header {
-    --split-gap: var(--space-sm);
-    padding: var(--space-sm);
-    border: 1px solid var(--cli-border);
-    border-radius: var(--radius-sm);
-    background: var(--cli-bg-elevated);
-  }
-
-  .section-title-row {
-    --row-gap: var(--space-xs);
-    align-items: center;
-  }
-
-  .section-actions {
-    --row-gap: var(--space-sm);
-  }
-
-  .section-title {
-    color: var(--cli-text-dim);
-    font-size: var(--text-xs);
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
-
-  .refresh-btn {
-    padding: var(--space-xs);
-    border: none;
-    background: transparent;
-    color: var(--cli-text-muted);
-    font-size: var(--text-base);
-    cursor: pointer;
-  }
-
-  .refresh-btn:hover {
-    color: var(--cli-text);
   }
 
   .session-list {

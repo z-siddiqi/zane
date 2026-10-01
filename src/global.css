@@ -22,6 +22,11 @@ body {
     color var(--transition-fast);
 }
 
+/* Full-bleed headers use 100vw, which includes the vertical scrollbar. */
+html {
+  overflow-x: clip;
+}
+
 #app {
   height: 100%;
 }

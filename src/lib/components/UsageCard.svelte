@@ -2,6 +2,7 @@
   import { account } from "../account.svelte";
   import type { RateLimitWindow } from "../types";
   import TokenActivity from "./TokenActivity.svelte";
+  import Heading from "./Heading.svelte";
 
   const WARNING_PERCENT = 80;
 
@@ -31,10 +32,7 @@
 
 {#if windows.length || account.usage}
   <section class="usage-card stack" bind:clientWidth={cardWidth}>
-    <div class="header split">
-      <span class="section-title">Usage</span>
-      <a class="details" href="/settings">details →</a>
-    </div>
+    <Heading title="Usage" />
 
     {#each windows as window}
       <div class="limit stack">
@@ -58,9 +56,9 @@
     {/each}
 
     {#if account.usage}
-      <a class="activity" href="/settings" aria-label="Token activity">
-        <TokenActivity usage={account.usage} weeks={heatmapWeeks} compact />
-      </a>
+      <div class="activity">
+        <TokenActivity usage={account.usage} weeks={heatmapWeeks} />
+      </div>
     {/if}
   </section>
 {/if}
@@ -68,28 +66,6 @@
 <style>
   .usage-card {
     --stack-gap: var(--space-sm);
-  }
-
-  .header {
-    --split-gap: var(--space-sm);
-    align-items: center;
-  }
-
-  .section-title {
-    color: var(--cli-text-dim);
-    font-size: var(--text-xs);
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
-
-  .details {
-    color: var(--cli-text-muted);
-    font-size: var(--text-xs);
-    text-decoration: none;
-  }
-
-  .details:hover {
-    color: var(--cli-text);
   }
 
   .limit {
@@ -137,8 +113,6 @@
   }
 
   .activity {
-    display: block;
-    text-decoration: none;
     padding-top: var(--space-xs);
   }
 </style>

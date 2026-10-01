@@ -90,12 +90,14 @@ class MessagesStore {
   get pendingThreadRequests(): PendingThreadRequest[] {
     const pending: PendingThreadRequest[] = [];
     for (const [threadId, transcript] of this.#transcripts) {
-      const count = transcript.messages.filter((message) =>
-        message.approval?.status === "pending" ||
-        message.userInputRequest?.status === "pending").length;
+      const count = transcript.messages.filter(isPendingRequest).length;
       if (count > 0) pending.push({ threadId, count });
     }
     return pending;
+  }
+
+  get pendingRequests(): Message[] {
+    return [...this.#transcripts.values()].flatMap((transcript) => transcript.messages.filter(isPendingRequest));
   }
 
   getThreadMessages(threadId: string | null): Message[] {
@@ -614,6 +616,10 @@ function itemIdFromParams(params: Record<string, unknown>, fallback: string): st
 function stableRequestId(prefix: string, rpcId: string | number, params: Record<string, unknown>): string {
   return firstString(params.approvalId, params.itemId, params.item_id, params.callId, params.call_id)
     ?? `${prefix}-${String(rpcId)}`;
+}
+
+function isPendingRequest(message: Message): boolean {
+  return message.approval?.status === "pending" || message.userInputRequest?.status === "pending";
 }
 
 function isApprovalMethod(method: string): boolean {

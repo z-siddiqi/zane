@@ -141,6 +141,7 @@
         onReasoningChange={(value) => dispatch("selectReasoning", { value })}
         onServiceTierChange={(value) => dispatch("selectServiceTier", { value })}
         onPersonalityChange={(value) => dispatch("selectPersonality", { value })}
+        menusBelow
       />
 
       <!-- Mode Toggle -->
@@ -350,10 +351,12 @@
 
   .dropdown-menu {
     position: absolute;
-    bottom: 100%;
+    top: 100%;
     left: 0;
     min-width: 140px;
-    margin-bottom: var(--space-xs);
+    max-height: 18rem;
+    overflow-y: auto;
+    margin-top: var(--space-xs);
     padding: var(--space-xs);
     background: var(--cli-bg-elevated);
     border: 1px solid var(--cli-border);
