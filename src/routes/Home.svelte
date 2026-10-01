@@ -239,6 +239,12 @@
     padding: 12vh var(--space-md) var(--space-xl);
   }
 
+  @media (max-width: 639px) {
+    .hero {
+      padding-top: var(--space-lg);
+    }
+  }
+
   .hero-content {
     display: flex;
     flex-direction: column;
